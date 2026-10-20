@@ -295,16 +295,6 @@ if (getElement("auth-form"))
       feedback("Could not connect to the server.");
     }
   });
-      return;
-    }
-    try {
-      const email = getElement("email").value.toLowerCase();
-      if (sessionStorage.getItem("queuesmart-email") !== email)
-        sessionStorage.removeItem("queuesmart-demo");
-      sessionStorage.setItem("queuesmart-email", email);
-    } catch (_) {}
-    location.href = "user_dashboard.html";
-  });
 window.QueueSmartValidation = {
   validateService(form) {
     const fields = ["serviceName", "description", "duration", "priority"].map(
