@@ -1,22 +1,47 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>QueueSmart Login</title>
-</head>
-<body>
-    <h1>QueueSmart</h1>
-    <h2>Login</h2>
-    <form>
-        <label>Email:</label>
-        <input type="email" required>
-        <br><br>
-        <label>Password:</label>
-        <input type="password" required>
-        <br><br>
-        <button type="submit">Login</button>
-    </form>
-    <p>Don't have an account?</p>
-    <a href="register.html">Register Here</a>
-
-</body>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QueueSmart — Login</title>
+    <link rel="stylesheet" href="shared.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>QueueSmart</h1>
+      <p>Student services, less waiting.</p>
+    </header>
+    <main>
+      <h2>Login</h2>
+      <p id="feedback" role="status"></p>
+      <form id="auth-form">
+        <label for="email">Email</label
+        ><input
+          id="email"
+          name="email"
+          type="email"
+          required
+          maxlength="254"
+          autocomplete="email"
+        /><label for="password">Password</label
+        ><input
+          id="password"
+          name="password"
+          type="password"
+          required
+          maxlength="128"
+          autocomplete="current-password"
+        /><button>Login</button>
+      </form>
+      <p>New here? <a href="register.html">Register</a></p>
+      <p>
+        This demo accepts any valid email and password format. Passwords are
+        never saved.
+      </p>
+    </main>
+    <footer>
+      Assignment 2 prototype · Mock data · No backend authentication
+    </footer>
+  </body>
 </html>
