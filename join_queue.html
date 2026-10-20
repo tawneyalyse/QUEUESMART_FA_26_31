@@ -1,31 +1,37 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
   <head>
-    <title>Queuesmart - Join Queue </title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QueueSmart — Join a Queue</title>
+    <link rel="stylesheet" href="shared.css" />
+    <script src="app.js" defer></script>
   </head>
   <body>
-    <h1>Queuesmart</h1>
-    <h2>Join a Queue</h2>
-    <p>Please Select Student Service:</p>
-    <form>
-      <label for="service">Student Service:</label>
-      <select id="service" name="service" required>
-        <option value ="">Select a service</option>
-        <option value ="advising">Academic Advising</option>
-        <option value = "financial-aid">Financial Aid</option>
-        <option value = "registration">Registration</option>
-        <option value = "transcripts">Transcript Request</option>
-        <option value = "student-id">Student ID Services</option>
-      </select>
-      <p>Estimated Wait: </p>
-      <button type ="submit">Join Queue</button>
-      <button type="button">Leave Queue</button>
-    </form>
-    <h3>Navigation</h3>
-    <a href="user-dashboard.html">Dashboard</a>
-    <a href="join-queue.html">Join Queue</a>
-    <a href="queue-status.html">Queue Status</a>
-    <a href="history.html">History</a>
-    <a href="index.html">Logout</a>
+    <header>
+      <h1>QueueSmart</h1>
+      <p>Student services, less waiting.</p>
+    </header>
+    <nav aria-label="Main navigation" id="navigation"></nav>
+    <main>
+      <h2>Join a Queue</h2>
+      <p id="feedback" role="status"></p>
+      <form id="join-form">
+        <label for="service">Student Service</label
+        ><select id="service" name="service" required>
+          <option value="">Select a service</option>
+        </select>
+        <p id="estimate" aria-live="polite">
+          Select a service to see the estimated wait.
+        </p>
+        <button id="join-button">Join Queue</button>
+        <button id="leave-button" type="button">Leave Queue</button>
+      </form>
+      <h3>Current Queue</h3>
+      <section id="queue-summary"></section>
+    </main>
+    <footer>
+      Assignment 2 prototype · Mock data · No backend authentication
+    </footer>
   </body>
 </html>
