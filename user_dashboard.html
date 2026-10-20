@@ -1,38 +1,30 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
   <head>
-    <title>QueueSmart Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QueueSmart — Student Dashboard</title>
+    <link rel="stylesheet" href="shared.css" />
+    <script src="app.js" defer></script>
   </head>
-
   <body>
-    <h1>Queuesmart</h1>
-    <h2>Student Dashboard</h2>
-    <p>Welcome, Student!</p>
-    <h3>Current Queue</h3>
-    <p> Service: Academic Advising</p>
-    <p>Position: </p>
-    <p>Estimated Wait: </p>
-    <p>Status: Waiting</p>
-    <a href = "queue-status.html">View Queue Status</a>
-    <h3>Available Student Services</h3>
-    <ul>
-      <li>Academic Advising - </li>
-      <li>Financial Aid - </li>
-      <li>Registration Assistance - </li>
-      <li>Transcript Requests - </li>
-      <li>Student ID Services -</li>
-    </ul>
-    <a href ="join-queue.html">Join a Queue</a>
-    <h3>Notifications</h3>
-    <ul>
-      <li>Your queue position is: </li>
-      <li> Your estimated wait time is: </li>
-    </ul>
-    <h3>Navigation</h3>
-    <a href="user-dashboard.html">Dashboard</a>
-    <a href="join-queue.html">Join Queue</a>
-    <a href="queue-status.html">Queue Status</a>
-    <a href="history.html">History</a>
-    <a href="index.html">Logout</a>
+    <header>
+      <h1>QueueSmart</h1>
+    </header>
+    <nav aria-label="Main navigation" id="navigation"></nav>
+    <main>
+      <h2>Student Dashboard</h2>
+      <p id="feedback" role="status"></p>
+      <h3>Current Queue</h3>
+      <section id="queue-summary"></section>
+      <p><a href="queue_status.html">View Queue Status</a></p>
+      <h3>Available Student Services</h3>
+      <ul id="services"></ul>
+      <a class="button" href="join_queue.html">Join a Queue</a>
+      <h3>Notifications Summary</h3>
+      <p id="notification-summary"></p>
+      <ul id="recent-notifications"></ul>
+      <a href="notifications.html">View all notifications</a>
+        </main>
   </body>
 </html>
