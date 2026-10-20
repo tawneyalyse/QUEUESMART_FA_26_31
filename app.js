@@ -329,3 +329,106 @@ if (!storageAvailable)
   feedback(
     "Browser storage is unavailable. Changes will last only on this page.",
   );
+
+let editingServiceId = null;
+
+if (getElement("service-form")) {
+  const form = getElement("service-form");
+  const list = getElement("service-list");
+  const cancelButton = getElement("cancel-edit");
+  const saveButton = getElement("save-service");
+
+  function renderServices() {
+    list.replaceChildren();
+
+    getElement("empty-services").hidden = services.length > 0;
+
+    services.forEach((service) => {
+      const row = document.createElement("tr");
+
+      [
+        service.name,
+        service.description || "",
+        `${service.duration} minutes`,
+        service.priority || "medium",
+      ].forEach((value) => row.append(element("td", value)));
+
+      const actions = element("td", "");
+      const editButton = element("button", "Edit");
+      editButton.type = "button";
+
+      editButton.addEventListener("click", () => {
+        editingServiceId = service.id;
+        form.elements.namedItem("serviceName").value = service.name;
+        form.elements.namedItem("description").value =
+          service.description || "";
+        form.elements.namedItem("duration").value = service.duration;
+        form.elements.namedItem("priority").value =
+          service.priority || "medium";
+
+        getElement("form-heading").textContent = "Edit Service";
+        saveButton.textContent = "Update Service";
+        cancelButton.hidden = false;
+      });
+
+      actions.append(editButton);
+      row.append(actions);
+      list.append(row);
+    });
+  }
+
+  function resetServiceForm() {
+    editingServiceId = null;
+    form.reset();
+    getElement("form-heading").textContent = "Create a Service";
+    saveButton.textContent = "Create Service";
+    cancelButton.hidden = true;
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+
+    if (!window.QueueSmartValidation.validateService(form)) return;
+
+    const name = form.elements.namedItem("serviceName").value.trim();
+    const description = form.elements.namedItem("description").value.trim();
+    const duration = Number(form.elements.namedItem("duration").value);
+    const priority = form.elements.namedItem("priority").value;
+
+    const duplicate = services.some(
+      (service) =>
+        service.name.toLowerCase() === name.toLowerCase() &&
+        service.id !== editingServiceId
+    );
+
+    if (duplicate) {
+      feedback("A service with that name already exists.");
+      return;
+    }
+
+    if (editingServiceId) {
+      const service = services.find((s) => s.id === editingServiceId);
+      if (service) Object.assign(service, { name, description, duration, priority });
+      feedback("Service updated.");
+    } else {
+      services.push({
+        id: `service-${Date.now()}`,
+        name,
+        description,
+        duration,
+        priority,
+        ahead: 0,
+      });
+      feedback("Service created.");
+    }
+
+    save();
+    resetServiceForm();
+    renderServices();
+  });
+
+  cancelButton.addEventListener("click", resetServiceForm);
+
+  renderServices();
+}
+
