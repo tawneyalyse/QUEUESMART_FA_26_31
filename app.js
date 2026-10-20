@@ -256,16 +256,45 @@ if (getElement("mark-read"))
     if (storageAvailable) feedback("All notifications marked as read.");
   });
 if (getElement("auth-form"))
-  getElement("auth-form").addEventListener("submit", (event) => {
+  getElement("auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+
     const form = event.currentTarget;
-    getElement("email").value = getElement("email").value.trim();
+    const email = getElement("email").value.trim().toLowerCase();
+    const password = getElement("password").value;
+
+    getElement("email").value = email;
+
     if (!form.reportValidity()) return;
-    if (page === "register.html") {
-      form.reset();
-      feedback(
-        "Demo registration validated. You can now go to Login; no account or password was saved.",
+
+    const isRegister = page === "register.html";
+
+    try {
+      const response = await fetch(
+        isRegister ? "/api/register" : "/api/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+          credentials: "include",
+        }
       );
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        feedback(result.message || "Login or registration failed.");
+        return;
+      }
+
+      location.href =
+        result.role === "Administrator"
+          ? "admin_dashboard.html"
+          : "user_dashboard.html";
+    } catch {
+      feedback("Could not connect to the server.");
+    }
+  });
       return;
     }
     try {
