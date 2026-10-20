@@ -4,7 +4,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-
+const authRoutes = require("./auth");
+app.use("/api", authRoutes);
 app.get("/api/health", (req, res) => {
   res.json({ success: true, message: "QueueSmart server is running." });
 });
