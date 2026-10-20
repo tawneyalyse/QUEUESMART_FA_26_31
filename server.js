@@ -4,6 +4,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(express.static(__dirname));
 const authRoutes = require("./auth");
 app.use("/api", authRoutes);
 app.get("/api/health", (req, res) => {
