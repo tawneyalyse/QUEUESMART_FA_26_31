@@ -1,15 +1,20 @@
 {
   "name": "queuesmart",
   "version": "1.0.0",
-  "description": "QueueSmart Authentication Backend",
+  "description": "QueueSmart Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "jest --coverage"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
     "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "jest": "^30.0.0",
+    "supertest": "^7.1.1"
   }
 }
