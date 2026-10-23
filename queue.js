@@ -140,7 +140,6 @@ router.post("/queues/join", (req, res) => {
   }
 
   const position = waitingFor(service.id).length + 1;
-  const waitTime = estimateWait(position, service.duration);
 
   const entry = {
     id: nextId++,
@@ -159,7 +158,7 @@ router.post("/queues/join", (req, res) => {
     email,
     service.name,
     position,
-    waitTime
+    estimateWait(position, service.duration)
   );
 
   res.status(201).json({
