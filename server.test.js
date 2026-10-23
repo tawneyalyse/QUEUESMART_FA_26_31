@@ -8,8 +8,8 @@ const validService = {
   priority: "medium"
 };
 
-beforeEach(() => {
-  // Each test gets a clean service list through the test-only reset endpoint.
+beforeEach(async () => {
+  await request(app).delete("/api/test/reset");
 });
 
 describe("Service validation", () => {
@@ -21,6 +21,13 @@ describe("Service validation", () => {
     expect(validateService({
       ...validService,
       serviceName: ""
+    })).toContain("Service name is required and must be text.");
+  });
+
+  test("rejects a non-text service name", () => {
+    expect(validateService({
+      ...validService,
+      serviceName: 123
     })).toContain("Service name is required and must be text.");
   });
 
@@ -52,6 +59,13 @@ describe("Service validation", () => {
     })).toContain("Duration must be a positive whole number.");
   });
 
+  test("rejects a decimal duration", () => {
+    expect(validateService({
+      ...validService,
+      duration: 2.5
+    })).toContain("Duration must be a positive whole number.");
+  });
+
   test("rejects an invalid priority", () => {
     expect(validateService({
       ...validService,
@@ -63,8 +77,18 @@ describe("Service validation", () => {
 describe("Service API", () => {
   test("lists services", async () => {
     const response = await request(app).get("/api/services");
+
     expect(response.status).toBe(200);
-    expect(Array.isArray(response.body)).toBe(true);
+    expect(response.body).toEqual([]);
+  });
+
+  test("creates a service", async () => {
+    const response = await request(app)
+      .post("/api/services")
+      .send(validService);
+
+    expect(response.status).toBe(201);
+    expect(response.body.serviceName).toBe("Academic Advising");
   });
 
   test("rejects invalid service creation", async () => {
@@ -76,12 +100,42 @@ describe("Service API", () => {
     expect(response.body.errors.length).toBeGreaterThan(0);
   });
 
-  test("creates a service", async () => {
+  test("rejects duplicate service names", async () => {
+    await request(app).post("/api/services").send(validService);
+
     const response = await request(app)
+      .post("/api/services")
+      .send({
+        ...validService,
+        serviceName: "academic advising"
+      });
+
+    expect(response.status).toBe(409);
+  });
+
+  test("updates an existing service", async () => {
+    const created = await request(app)
       .post("/api/services")
       .send(validService);
 
-    expect(response.status).toBe(201);
-    expect(response.body.serviceName).toBe(validService.serviceName);
+    const response = await request(app)
+      .put(`/api/services/${created.body.id}`)
+      .send({
+        ...validService,
+        serviceName: "Updated Advising",
+        duration: 20
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.serviceName).toBe("Updated Advising");
+    expect(response.body.duration).toBe(20);
+  });
+
+  test("returns 404 when updating a missing service", async () => {
+    const response = await request(app)
+      .put("/api/services/999")
+      .send(validService);
+
+    expect(response.status).toBe(404);
   });
 });
