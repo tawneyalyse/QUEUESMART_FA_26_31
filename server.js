@@ -8,20 +8,18 @@ app.use(express.json());
 
 app.use(
   session({
-    secret:
-      process.env.SESSION_SECRET || "queuesmart-dev-secret-change-me",
+    secret: process.env.SESSION_SECRET || "queuesmart-dev-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
-      maxAge: 30 * 60 * 1000, // 30 minutes
+      maxAge: 30 * 60 * 1000,
     },
   })
 );
 
-// Middleware to require an authenticated user
 function requireAuth(req, res, next) {
   if (!req.session.user) {
     return res.status(401).json({
@@ -33,7 +31,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Middleware to require an administrator
 function requireAdmin(req, res, next) {
   if (!req.session.user) {
     return res.status(401).json({
@@ -55,10 +52,11 @@ function requireAdmin(req, res, next) {
 app.locals.requireAuth = requireAuth;
 app.locals.requireAdmin = requireAdmin;
 
+// authentication routes
 const authRoutes = require("./auth");
 app.use("/api", authRoutes);
 
-// return the current login status
+
 app.get("/api/session", (req, res) => {
   if (!req.session.user) {
     return res.json({
@@ -77,7 +75,19 @@ app.get("/api/session", (req, res) => {
     },
   });
 });
-// log out the current user
+app.get("/api/user", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    user: req.session.user,
+  });
+});
+app.get("/api/admin", requireAdmin, (req, res) => {
+  res.json({
+    success: true,
+    message: "Administrator access granted.",
+  });
+});
+
 app.post("/api/logout", (req, res) => {
   req.session.destroy((error) => {
     if (error) {
@@ -86,7 +96,9 @@ app.post("/api/logout", (req, res) => {
         message: "Could not log out.",
       });
     }
+
     res.clearCookie("connect.sid");
+
     res.json({
       success: true,
       message: "Logout successful.",
@@ -100,8 +112,8 @@ app.get("/api/health", (req, res) => {
     message: "QueueSmart server is running.",
   });
 });
-
 app.use(express.static(__dirname));
+
 app.listen(PORT, () => {
   console.log(`QueueSmart server running on port ${PORT}`);
 });
