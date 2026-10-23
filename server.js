@@ -5,10 +5,20 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(__dirname));
+
 const authRoutes = require("./auth");
+const notificationRoutes = require("./notifications");
+const historyRoutes = require("./history");
+
 app.use("/api", authRoutes);
+app.use("/api", notificationRoutes);
+app.use("/api", historyRoutes);
+
 app.get("/api/health", (req, res) => {
-  res.json({ success: true, message: "QueueSmart server is running." });
+  res.json({
+    success: true,
+    message: "QueueSmart server is running.",
+  });
 });
 
 app.listen(PORT, () => {
