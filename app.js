@@ -201,7 +201,7 @@ if (getElement("service")) {
       : "Select a service to see the estimated wait.";
   });
 }
-if (getElement("join-form"))
+if (getElement("join-form") && page !== "join_queue.html")
   getElement("join-form").addEventListener("submit", (event) => {
     event.preventDefault();
     if (!event.currentTarget.reportValidity()) return;
@@ -227,7 +227,7 @@ if (getElement("join-form"))
     if (storageAvailable)
       feedback("You joined the queue. Open Queue Status for updates.");
   });
-if (getElement("leave-button"))
+if (getElement("leave-button") && page !== "join_queue.html")
   getElement("leave-button").addEventListener("click", () =>
     completeQueue("Left queue"),
   );

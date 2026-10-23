@@ -6,6 +6,7 @@
     <title>QueueSmart — Join a Queue</title>
     <link rel="stylesheet" href="shared.css" />
     <script src="app.js" defer></script>
+    <script src="queue-page.js" defer></script>
   </head>
   <body>
     <header>
@@ -17,6 +18,8 @@
       <h2>Join a Queue</h2>
       <p id="feedback" role="status"></p>
       <form id="join-form">
+        <label for="userEmail">Email</label>
+        <input id="userEmail" type="email" name="userEmail" maxlength="254" required />
         <label for="service">Student Service</label
         ><select id="service" name="service" required>
           <option value="">Select a service</option>
@@ -31,7 +34,7 @@
       <section id="queue-summary"></section>
     </main>
     <footer>
-      Assignment 2 prototype · Mock data · No backend authentication
+Queue information is kept in memory for Assignment 3.
     </footer>
   </body>
 </html>
