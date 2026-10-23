@@ -1,6 +1,8 @@
 const sqlite3 = require("sqlite3").verbose();
 const bcrypt = require("bcrypt");
-const db = new sqlite3.Database("./queuesmart.db");
+const path = require("path");
+
+const db = new sqlite3.Database(path.join(__dirname, "queuesmart.db"));
 
 db.serialize(() => {
   db.run(`
@@ -13,4 +15,5 @@ db.serialize(() => {
     )
   `);
 });
+
 module.exports = { db, bcrypt };
