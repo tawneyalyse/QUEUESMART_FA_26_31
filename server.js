@@ -10,7 +10,6 @@ const queueRoutes = require("./queue");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
 
 app.use(
@@ -28,7 +27,6 @@ app.use(
 
 app.use(express.static(__dirname));
 
-// Authentication and authorization middleware
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.user) {
     return res.status(401).json({
@@ -61,13 +59,11 @@ function requireAdmin(req, res, next) {
 app.locals.requireAuth = requireAuth;
 app.locals.requireAdmin = requireAdmin;
 
-// Register API routes
 app.use("/api", authRoutes);
 app.use("/api", notificationRoutes);
 app.use("/api", historyRoutes);
 app.use("/api", queueRoutes);
 
-// Check login session
 app.get("/api/session", (req, res) => {
   if (!req.session || !req.session.user) {
     return res.json({
@@ -81,7 +77,6 @@ app.get("/api/session", (req, res) => {
   });
 });
 
-// Get current user
 app.get("/api/user", requireAuth, (req, res) => {
   res.json({
     success: true,
@@ -89,7 +84,6 @@ app.get("/api/user", requireAuth, (req, res) => {
   });
 });
 
-// Verify administrator access
 app.get("/api/admin", requireAdmin, (req, res) => {
   res.json({
     success: true,
@@ -97,7 +91,6 @@ app.get("/api/admin", requireAdmin, (req, res) => {
   });
 });
 
-// Log out
 app.post("/api/logout", (req, res) => {
   if (!req.session) {
     return res.json({
@@ -123,7 +116,6 @@ app.post("/api/logout", (req, res) => {
   });
 });
 
-// Service management
 let services = [];
 let nextId = 1;
 
@@ -157,12 +149,10 @@ function validateService(data) {
   return errors;
 }
 
-// List services
 app.get("/api/services", (req, res) => {
   res.json(services);
 });
 
-// Create a service
 app.post("/api/services", (req, res) => {
   const errors = validateService(req.body);
 
@@ -195,7 +185,6 @@ app.post("/api/services", (req, res) => {
   return res.status(201).json(service);
 });
 
-// Update a service
 app.put("/api/services/:id", (req, res) => {
   const id = Number(req.params.id);
   const index = services.findIndex(service => service.id === id);
@@ -237,7 +226,6 @@ app.put("/api/services/:id", (req, res) => {
   return res.json(services[index]);
 });
 
-// Health check
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
@@ -246,7 +234,6 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Reset services during tests only
 if (process.env.NODE_ENV === "test") {
   app.delete("/api/test/reset", (req, res) => {
     services = [];
@@ -256,7 +243,6 @@ if (process.env.NODE_ENV === "test") {
   });
 }
 
-// Start server
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`QueueSmart server running on port ${PORT}`);
