@@ -37,6 +37,50 @@ function validateService(data) {
 
   return errors;
 }
+let users = [];
+
+app.post("/api/register", (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({
+      error: "Email and password are required."
+    });
+  }
+
+  const existingUser = users.find(
+    user => user.email.toLowerCase() === email.toLowerCase()
+  );
+
+  if (existingUser) {
+    return res.status(409).json({
+      error: "An account with this email already exists."
+    });
+  }
+
+  users.push({ email, password });
+
+  res.status(201).json({
+    message: "Registration successful."
+  });
+});
+
+app.post("/api/login", (req, res) => {
+  const { email, password } = req.body;
+
+  const user = users.find(
+    user =>
+      user.email.toLowerCase() === (email || "").toLowerCase() &&
+      user.password === password
+  );
+
+  if (!user) {
+    return res.status(401).json({
+      error: "Invalid email or password."
+    });
+  }
+  res.json({ message: "Login successful." });
+});
 
 app.get("/api/services", (req, res) => {
   res.json(services);
