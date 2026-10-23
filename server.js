@@ -2,7 +2,6 @@ const express = require("express");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.use(express.json());
 
 let services = [];
@@ -11,7 +10,11 @@ let nextId = 1;
 function validateService(data) {
   const errors = [];
 
-  if (!data.serviceName || typeof data.serviceName !== "string" || !data.serviceName.trim()) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return ["Request body must be a JSON object."];
+  }
+
+  if (typeof data.serviceName !== "string" || !data.serviceName.trim()) {
     errors.push("Service name is required and must be text.");
   } else if (data.serviceName.trim().length > 100) {
     errors.push("Service name cannot exceed 100 characters.");
@@ -44,7 +47,6 @@ app.post("/api/services", (req, res) => {
   if (errors.length > 0) {
     return res.status(400).json({ errors });
   }
-
   const name = req.body.serviceName.trim();
 
   if (services.some(service =>
@@ -54,7 +56,6 @@ app.post("/api/services", (req, res) => {
       errors: ["A service with this name already exists."]
     });
   }
-
   const service = {
     id: nextId++,
     serviceName: name,
@@ -106,6 +107,14 @@ app.put("/api/services/:id", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK" });
 });
+
+if (process.env.NODE_ENV === "test") {
+  app.delete("/api/test/reset", (req, res) => {
+    services = [];
+    nextId = 1;
+    res.sendStatus(204);
+  });
+}
 
 if (require.main === module) {
   app.listen(PORT, () => {
