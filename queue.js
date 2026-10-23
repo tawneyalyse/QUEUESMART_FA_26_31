@@ -162,17 +162,6 @@ router.post("/queues/join", (req, res) => {
     waitTime
   );
 
-  if (position <= 2) {
-    notifyAlmostReady(
-      email,
-      service.name,
-      position,
-      waitTime
-    );
-
-    entry.nearFrontNotified = true;
-  }
-
   res.status(201).json({
     success: true,
     message: "Joined queue.",
