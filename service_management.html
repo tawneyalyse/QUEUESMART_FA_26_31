@@ -1,4 +1,4 @@
-
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,17 +7,19 @@
   <title>QueueSmart | Service Management</title>
   <link rel="stylesheet" href="shared.css">
   <script src="app.js" defer></script>
+  <script src="admin.js" defer></script>
 </head>
 <body>
   <header>
     <h1>QueueSmart</h1>
-    <nav id="navigation" aria-label="Main navigation"></nav>
+    <p>Student services, less waiting.</p>
   </header>
+
+  <nav id="navigation" aria-label="Main navigation"></nav>
 
   <main>
     <h2>Service Management</h2>
     <p>Create and manage student services and their queue settings.</p>
-
     <p id="feedback" role="status" aria-live="polite"></p>
 
     <section>
@@ -37,6 +39,7 @@
         <textarea
           id="description"
           name="description"
+          maxlength="500"
           required
         ></textarea>
 
@@ -66,15 +69,15 @@
     <section>
       <h3>Existing Services</h3>
 
-      <div class="table-container">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Service Name</th>
-              <th>Description</th>
-              <th>Duration</th>
-              <th>Priority</th>
-              <th>Actions</th>
+              <th scope="col">Service Name</th>
+              <th scope="col">Description</th>
+              <th scope="col">Duration</th>
+              <th scope="col">Priority</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody id="service-list"></tbody>
@@ -84,5 +87,8 @@
       <p id="empty-services" hidden>No services have been created yet.</p>
     </section>
   </main>
+
+  <footer>QueueSmart Assignment 2</footer>
 </body>
 </html>
+```
