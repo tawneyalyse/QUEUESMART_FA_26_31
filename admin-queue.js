@@ -3,7 +3,7 @@
 const serviceSelect = document.getElementById("admin-service");
 const queueContainer = document.getElementById("managed-queue");
 const serveButton = document.getElementById("serve-next");
-const feedback = document.getElementById("feedback");
+const feedbackElement = document.getElementById("feedback");
 
 async function loadServices() {
   try {
@@ -23,7 +23,7 @@ async function loadServices() {
       await loadQueue();
     }
   } catch {
-    feedback.textContent = "Could not load services.";
+    feedbackElement.textContent = "Could not load services.";
   }
 }
 
@@ -37,6 +37,12 @@ async function loadQueue() {
     const result = await response.json();
 
     queueContainer.replaceChildren();
+
+    if (!response.ok) {
+      feedbackElement.textContent =
+        result.message || "Could not load queue.";
+      return;
+    }
 
     const heading = document.createElement("h3");
     heading.textContent = result.service.name;
@@ -62,7 +68,7 @@ async function loadQueue() {
     queueContainer.append(list);
     serveButton.disabled = false;
   } catch {
-    feedback.textContent = "Could not load queue.";
+    feedbackElement.textContent = "Could not load queue.";
   }
 }
 
@@ -84,14 +90,16 @@ serveButton.addEventListener("click", async () => {
     const result = await response.json();
 
     if (!response.ok) {
-      feedback.textContent = result.message;
+      feedbackElement.textContent =
+        result.message || "Could not serve the next student.";
       return;
     }
 
-    feedback.textContent = "Next student served.";
+    feedbackElement.textContent = "Next student served.";
     await loadQueue();
   } catch {
-    feedback.textContent = "Could not serve the next student.";
+    feedbackElement.textContent =
+      "Could not serve the next student.";
   }
 });
 
