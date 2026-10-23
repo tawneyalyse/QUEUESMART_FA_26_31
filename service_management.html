@@ -1,0 +1,88 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QueueSmart | Service Management</title>
+  <link rel="stylesheet" href="shared.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>QueueSmart</h1>
+    <nav id="navigation" aria-label="Main navigation"></nav>
+  </header>
+
+  <main>
+    <h2>Service Management</h2>
+    <p>Create and manage student services and their queue settings.</p>
+
+    <p id="feedback" role="status" aria-live="polite"></p>
+
+    <section>
+      <h3 id="form-heading">Create a Service</h3>
+
+      <form id="service-form">
+        <label for="serviceName">Service Name</label>
+        <input
+          type="text"
+          id="serviceName"
+          name="serviceName"
+          maxlength="100"
+          required
+        >
+
+        <label for="description">Description</label>
+        <textarea
+          id="description"
+          name="description"
+          required
+        ></textarea>
+
+        <label for="duration">Expected Duration (minutes)</label>
+        <input
+          type="number"
+          id="duration"
+          name="duration"
+          min="1"
+          step="1"
+          required
+        >
+
+        <label for="priority">Priority Level</label>
+        <select id="priority" name="priority" required>
+          <option value="">Select priority</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+
+        <button type="submit" id="save-service">Create Service</button>
+        <button type="button" id="cancel-edit" hidden>Cancel Edit</button>
+      </form>
+    </section>
+
+    <section>
+      <h3>Existing Services</h3>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Service Name</th>
+              <th>Description</th>
+              <th>Duration</th>
+              <th>Priority</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="service-list"></tbody>
+        </table>
+      </div>
+
+      <p id="empty-services" hidden>No services have been created yet.</p>
+    </section>
+  </main>
+</body>
+</html>
