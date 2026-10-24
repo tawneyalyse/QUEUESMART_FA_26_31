@@ -163,7 +163,8 @@ app.post("/api/services", (req, res) => {
 
   if (
     services.some(
-      service => service.serviceName.toLowerCase() === name.toLowerCase()
+      (service) =>
+        service.serviceName.toLowerCase() === name.toLowerCase()
     )
   ) {
     return res.status(409).json({
@@ -186,7 +187,9 @@ app.post("/api/services", (req, res) => {
 
 app.put("/api/services/:id", (req, res) => {
   const id = Number(req.params.id);
-  const index = services.findIndex(service => service.id === id);
+  const index = services.findIndex(
+    (service) => service.id === id
+  );
 
   if (index === -1) {
     return res.status(404).json({
@@ -204,7 +207,7 @@ app.put("/api/services/:id", (req, res) => {
 
   if (
     services.some(
-      service =>
+      (service) =>
         service.id !== id &&
         service.serviceName.toLowerCase() === name.toLowerCase()
     )
