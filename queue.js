@@ -48,6 +48,7 @@ function updateAlmostReady(service) {
 
   waiting.forEach((entry, index) => {
     const position = index + 1;
+
     if (position <= 2 && entry.lastPosition > 2 && !entry.nearFrontNotified) {
       notifyAlmostReady(
         entry.userEmail,
@@ -55,8 +56,10 @@ function updateAlmostReady(service) {
         position,
         estimateWait(position, service.duration)
       );
+
       entry.nearFrontNotified = true;
     }
+
     entry.lastPosition = position;
   });
 }
@@ -66,6 +69,7 @@ router.get("/queues/services", (req, res) => {
     success: true,
     services: services.map((service) => {
       const waiting = waitingFor(service.id).length;
+
       return {
         ...service,
         waiting,
@@ -77,18 +81,25 @@ router.get("/queues/services", (req, res) => {
 
 router.get("/queues/user/:userEmail", (req, res) => {
   if (!validEmail(req.params.userEmail)) {
-    return res.status(400).json({ success: false, message: "Enter a valid email." });
+    return res.status(400).json({
+      success: false,
+      message: "Enter a valid email.",
+    });
   }
 
   const email = req.params.userEmail.toLowerCase().trim();
   const entry = queues.find((item) => item.userEmail === email);
 
   if (!entry) {
-    return res.status(404).json({ success: false, message: "User is not in a queue." });
+    return res.status(404).json({
+      success: false,
+      message: "User is not in a queue.",
+    });
   }
 
   const service = findService(entry.serviceId);
   const position = waitingFor(service.id).indexOf(entry) + 1;
+
   res.json({
     success: true,
     service,
@@ -99,7 +110,11 @@ router.get("/queues/user/:userEmail", (req, res) => {
 router.post("/queues/join", (req, res) => {
   const { userEmail, serviceId } = req.body || {};
 
-  if (!validEmail(userEmail) || typeof serviceId !== "string" || !serviceId.trim()) {
+  if (
+    !validEmail(userEmail) ||
+    typeof serviceId !== "string" ||
+    !serviceId.trim()
+  ) {
     return res.status(400).json({
       success: false,
       message: "A valid email and service ID are required.",
@@ -107,16 +122,25 @@ router.post("/queues/join", (req, res) => {
   }
 
   const service = findService(serviceId);
+
   if (!service) {
-    return res.status(404).json({ success: false, message: "Service not found." });
+    return res.status(404).json({
+      success: false,
+      message: "Service not found.",
+    });
   }
 
   const email = userEmail.toLowerCase().trim();
+
   if (queues.some((entry) => entry.userEmail === email)) {
-    return res.status(409).json({ success: false, message: "User is already in a queue." });
+    return res.status(409).json({
+      success: false,
+      message: "User is already in a queue.",
+    });
   }
 
   const position = waitingFor(service.id).length + 1;
+
   const entry = {
     id: nextId++,
     userEmail: email,
@@ -127,8 +151,15 @@ router.post("/queues/join", (req, res) => {
   };
 
   queues.push(entry);
+
   createHistory(email, service.name);
-  notifyQueueJoined(email, service.name, position, estimateWait(position, service.duration));
+
+  notifyQueueJoined(
+    email,
+    service.name,
+    position,
+    estimateWait(position, service.duration)
+  );
 
   res.status(201).json({
     success: true,
@@ -139,47 +170,87 @@ router.post("/queues/join", (req, res) => {
 
 router.delete("/queues/:serviceId/leave", (req, res) => {
   const service = findService(req.params.serviceId);
+
   if (!service) {
-    return res.status(404).json({ success: false, message: "Service not found." });
+    return res.status(404).json({
+      success: false,
+      message: "Service not found.",
+    });
   }
 
   const { userEmail } = req.body || {};
+
   if (!validEmail(userEmail)) {
-    return res.status(400).json({ success: false, message: "Enter a valid email." });
+    return res.status(400).json({
+      success: false,
+      message: "Enter a valid email.",
+    });
   }
 
   const email = userEmail.toLowerCase().trim();
+
   const index = queues.findIndex(
-    (entry) => entry.userEmail === email && entry.serviceId === service.id
+    (entry) =>
+      entry.userEmail === email &&
+      entry.serviceId === service.id
   );
 
   if (index === -1) {
-    return res.status(404).json({ success: false, message: "User is not in this queue." });
+    return res.status(404).json({
+      success: false,
+      message: "User is not in this queue.",
+    });
   }
 
   queues.splice(index, 1);
-  completeHistory(email, service.name, "left");
+
+  completeHistory(
+    email,
+    service.name,
+    "left"
+  );
+
   updateAlmostReady(service);
 
-  res.json({ success: true, message: "Left queue.", queue: queueDetails(service) });
+  res.json({
+    success: true,
+    message: "Left queue.",
+    queue: queueDetails(service),
+  });
 });
 
 router.get("/queues/:serviceId/wait-time", (req, res) => {
   const service = findService(req.params.serviceId);
+
   if (!service) {
-    return res.status(404).json({ success: false, message: "Service not found." });
+    return res.status(404).json({
+      success: false,
+      message: "Service not found.",
+    });
   }
 
   let position = waitingFor(service.id).length + 1;
+
   if (req.query.userEmail !== undefined) {
     if (!validEmail(req.query.userEmail)) {
-      return res.status(400).json({ success: false, message: "Enter a valid email." });
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid email.",
+      });
     }
 
     const email = req.query.userEmail.toLowerCase().trim();
-    position = waitingFor(service.id).findIndex((entry) => entry.userEmail === email) + 1;
+
+    position =
+      waitingFor(service.id).findIndex(
+        (entry) => entry.userEmail === email
+      ) + 1;
+
     if (position === 0) {
-      return res.status(404).json({ success: false, message: "User is not in this queue." });
+      return res.status(404).json({
+        success: false,
+        message: "User is not in this queue.",
+      });
     }
   }
 
@@ -187,39 +258,69 @@ router.get("/queues/:serviceId/wait-time", (req, res) => {
     success: true,
     serviceId: service.id,
     position,
-    estimatedWait: estimateWait(position, service.duration),
+    estimatedWait: estimateWait(
+      position,
+      service.duration
+    ),
   });
 });
 
 router.get("/queues/:serviceId", (req, res) => {
   const service = findService(req.params.serviceId);
+
   if (!service) {
-    return res.status(404).json({ success: false, message: "Service not found." });
+    return res.status(404).json({
+      success: false,
+      message: "Service not found.",
+    });
   }
 
-  res.json({ success: true, service, queue: queueDetails(service) });
+  res.json({
+    success: true,
+    service,
+    queue: queueDetails(service),
+  });
 });
 
 router.post("/queues/:serviceId/next", (req, res) => {
   const service = findService(req.params.serviceId);
+
   if (!service) {
-    return res.status(404).json({ success: false, message: "Service not found." });
+    return res.status(404).json({
+      success: false,
+      message: "Service not found.",
+    });
   }
 
   const waiting = waitingFor(service.id);
+
   if (!waiting.length) {
-    return res.status(404).json({ success: false, message: "Queue is empty." });
+    return res.status(404).json({
+      success: false,
+      message: "Queue is empty.",
+    });
   }
 
   const next = waiting[0];
+
   queues.splice(queues.indexOf(next), 1);
-  completeHistory(next.userEmail, service.name, "served");
+
+  completeHistory(
+    next.userEmail,
+    service.name,
+    "served"
+  );
+
   updateAlmostReady(service);
 
   res.json({
     success: true,
     message: "Next user served.",
-    served: { id: next.id, userEmail: next.userEmail, serviceId: service.id },
+    served: {
+      id: next.id,
+      userEmail: next.userEmail,
+      serviceId: service.id,
+    },
     queue: queueDetails(service),
   });
 });

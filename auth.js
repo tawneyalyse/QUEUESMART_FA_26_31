@@ -1,4 +1,3 @@
-```javascript
 const express = require("express");
 const { db, bcrypt } = require("./database");
 const router = express.Router();
@@ -137,4 +136,3 @@ router.post("/login", (req, res) => {
 });
 
 module.exports = router;
-```

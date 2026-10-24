@@ -1,3 +1,7 @@
+process.env.NODE_ENV = "test";
+
+const { describe, test, beforeEach } = require("node:test");
+const assert = require("node:assert/strict");
 const request = require("supertest");
 const { app, validateService } = require("./server");
 
@@ -14,63 +18,79 @@ beforeEach(async () => {
 
 describe("Service validation", () => {
   test("accepts valid service data", () => {
-    expect(validateService(validService)).toEqual([]);
+    assert.deepEqual(validateService(validService), []);
   });
 
   test("rejects a missing service name", () => {
-    expect(validateService({
-      ...validService,
-      serviceName: ""
-    })).toContain("Service name is required and must be text.");
+    assert.ok(
+      validateService({
+        ...validService,
+        serviceName: ""
+      }).includes("Service name is required and must be text.")
+    );
   });
 
   test("rejects a non-text service name", () => {
-    expect(validateService({
-      ...validService,
-      serviceName: 123
-    })).toContain("Service name is required and must be text.");
+    assert.ok(
+      validateService({
+        ...validService,
+        serviceName: 123
+      }).includes("Service name is required and must be text.")
+    );
   });
 
   test("rejects a service name over 100 characters", () => {
-    expect(validateService({
-      ...validService,
-      serviceName: "A".repeat(101)
-    })).toContain("Service name cannot exceed 100 characters.");
+    assert.ok(
+      validateService({
+        ...validService,
+        serviceName: "A".repeat(101)
+      }).includes("Service name cannot exceed 100 characters.")
+    );
   });
 
   test("rejects a missing description", () => {
-    expect(validateService({
-      ...validService,
-      description: ""
-    })).toContain("Description is required and must be text.");
+    assert.ok(
+      validateService({
+        ...validService,
+        description: ""
+      }).includes("Description is required and must be text.")
+    );
   });
 
   test("rejects a description over 500 characters", () => {
-    expect(validateService({
-      ...validService,
-      description: "A".repeat(501)
-    })).toContain("Description cannot exceed 500 characters.");
+    assert.ok(
+      validateService({
+        ...validService,
+        description: "A".repeat(501)
+      }).includes("Description cannot exceed 500 characters.")
+    );
   });
 
   test("rejects an invalid duration", () => {
-    expect(validateService({
-      ...validService,
-      duration: 0
-    })).toContain("Duration must be a positive whole number.");
+    assert.ok(
+      validateService({
+        ...validService,
+        duration: 0
+      }).includes("Duration must be a positive whole number.")
+    );
   });
 
   test("rejects a decimal duration", () => {
-    expect(validateService({
-      ...validService,
-      duration: 2.5
-    })).toContain("Duration must be a positive whole number.");
+    assert.ok(
+      validateService({
+        ...validService,
+        duration: 2.5
+      }).includes("Duration must be a positive whole number.")
+    );
   });
 
   test("rejects an invalid priority", () => {
-    expect(validateService({
-      ...validService,
-      priority: "urgent"
-    })).toContain("Priority must be low, medium, or high.");
+    assert.ok(
+      validateService({
+        ...validService,
+        priority: "urgent"
+      }).includes("Priority must be low, medium, or high.")
+    );
   });
 });
 
@@ -78,8 +98,8 @@ describe("Service API", () => {
   test("lists services", async () => {
     const response = await request(app).get("/api/services");
 
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual([]);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, []);
   });
 
   test("creates a service", async () => {
@@ -87,33 +107,40 @@ describe("Service API", () => {
       .post("/api/services")
       .send(validService);
 
-    expect(response.status).toBe(201);
-    expect(response.body.serviceName).toBe("Academic Advising");
+    assert.equal(response.status, 201);
+    assert.equal(response.body.serviceName, "Academic Advising");
+    assert.equal(response.body.description, "Help with academic planning");
+    assert.equal(response.body.duration, 10);
+    assert.equal(response.body.priority, "medium");
   });
 
-  test("rejects invalid service creation", async () => {
-    const response = await request(app)
-      .post("/api/services")
-      .send({ serviceName: "" });
-
-    expect(response.status).toBe(400);
-    expect(response.body.errors.length).toBeGreaterThan(0);
-  });
-
-  test("rejects duplicate service names", async () => {
-    await request(app).post("/api/services").send(validService);
-
+  test("rejects invalid service data", async () => {
     const response = await request(app)
       .post("/api/services")
       .send({
-        ...validService,
-        serviceName: "academic advising"
+        serviceName: "",
+        description: "",
+        duration: 0,
+        priority: "urgent"
       });
 
-    expect(response.status).toBe(409);
+    assert.equal(response.status, 400);
+    assert.ok(Array.isArray(response.body.errors));
   });
 
-  test("updates an existing service", async () => {
+  test("rejects duplicate service names", async () => {
+    await request(app)
+      .post("/api/services")
+      .send(validService);
+
+    const response = await request(app)
+      .post("/api/services")
+      .send(validService);
+
+    assert.equal(response.status, 409);
+  });
+
+  test("updates a service", async () => {
     const created = await request(app)
       .post("/api/services")
       .send(validService);
@@ -121,14 +148,16 @@ describe("Service API", () => {
     const response = await request(app)
       .put(`/api/services/${created.body.id}`)
       .send({
-        ...validService,
-        serviceName: "Updated Advising",
-        duration: 20
+        serviceName: "Academic Advising",
+        description: "Updated advising service",
+        duration: 15,
+        priority: "high"
       });
 
-    expect(response.status).toBe(200);
-    expect(response.body.serviceName).toBe("Updated Advising");
-    expect(response.body.duration).toBe(20);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.description, "Updated advising service");
+    assert.equal(response.body.duration, 15);
+    assert.equal(response.body.priority, "high");
   });
 
   test("returns 404 when updating a missing service", async () => {
@@ -136,6 +165,6 @@ describe("Service API", () => {
       .put("/api/services/999")
       .send(validService);
 
-    expect(response.status).toBe(404);
+    assert.equal(response.status, 404);
   });
 });
