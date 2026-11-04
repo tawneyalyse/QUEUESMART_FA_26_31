@@ -1,21 +1,49 @@
 const express = require("express");
+const { run, get, all } = require("./database");
 
 const router = express.Router();
-const notifications = [];
-let nextId = 1;
 
-function createNotification(userEmail, type, message) {
-  const notification = {
-    id: nextId++,
-    userEmail: userEmail.toLowerCase().trim(),
-    type,
-    message,
-    read: false,
-    createdAt: new Date().toISOString(),
-  };
+const selectNotification = `
+  SELECT n.id,
+         LOWER(u.email) AS userEmail,
+         n.type,
+         n.message,
+         n.is_read AS read,
+         n.created_at AS createdAt
+  FROM notifications AS n
+  JOIN users AS u ON u.id = n.user_id
+`;
 
-  notifications.push(notification);
-  return notification;
+// SQLite stores read status as 0 or 1. The API returns false or true.
+function formatNotification(row) {
+  return { ...row, read: Boolean(row.read) };
+}
+
+async function getNotification(id) {
+  const row = await get(selectNotification + " WHERE n.id = ?", [id]);
+  return row ? formatNotification(row) : null;
+}
+
+async function createNotification(userEmail, type, message) {
+  const email = userEmail.trim().toLowerCase();
+  const user = await get(
+    "SELECT id FROM users WHERE email = ? COLLATE NOCASE",
+    [email]
+  );
+
+  if (!user) {
+    const error = new Error("User not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  const result = await run(
+    `INSERT INTO notifications (user_id, type, message, is_read, created_at)
+     VALUES (?, ?, ?, 0, ?)`,
+    [user.id, type, message, new Date().toISOString()]
+  );
+
+  return getNotification(result.id);
 }
 
 function notifyQueueJoined(userEmail, serviceName, position, waitTime) {
@@ -34,8 +62,8 @@ function notifyAlmostReady(userEmail, serviceName, position, waitTime) {
   );
 }
 
-router.post("/notifications", (req, res) => {
-  const { userEmail, type, message } = req.body;
+router.post("/notifications", async (req, res, next) => {
+  const { userEmail, type, message } = req.body || {};
 
   if (!userEmail || !type || !message) {
     return res.status(400).json({
@@ -58,7 +86,9 @@ router.post("/notifications", (req, res) => {
   if (
     !userEmail.includes("@") ||
     userEmail.length > 254 ||
+    !type.trim() ||
     type.length > 50 ||
+    !message.trim() ||
     message.length > 250
   ) {
     return res.status(400).json({
@@ -67,61 +97,78 @@ router.post("/notifications", (req, res) => {
     });
   }
 
-  const notification = createNotification(userEmail, type, message);
+  try {
+    const notification = await createNotification(userEmail, type, message);
+    return res.status(201).json({ success: true, notification });
+  } catch (error) {
+    if (error.status === 404) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
 
-  res.status(201).json({
-    success: true,
-    notification,
-  });
-});
-
-router.get("/notifications/:userEmail", (req, res) => {
-  const userEmail = req.params.userEmail.toLowerCase().trim();
-
-  const userNotifications = notifications.filter(
-    (notification) => notification.userEmail === userEmail
-  );
-
-  res.json({
-    success: true,
-    notifications: userNotifications,
-  });
-});
-
-router.patch("/notifications/:id/read", (req, res) => {
-  const id = Number(req.params.id);
-  const notification = notifications.find((item) => item.id === id);
-
-  if (!notification) {
-    return res.status(404).json({
-      success: false,
-      message: "Notification not found.",
-    });
+    return next(error);
   }
-
-  notification.read = true;
-
-  res.json({
-    success: true,
-    notification,
-  });
 });
 
-router.patch("/notifications/user/:userEmail/read-all", (req, res) => {
-  const userEmail = req.params.userEmail.toLowerCase().trim();
+router.get("/notifications/:userEmail", async (req, res, next) => {
+  try {
+    const email = req.params.userEmail.trim().toLowerCase();
+    const rows = await all(
+      selectNotification + " WHERE u.email = ? COLLATE NOCASE ORDER BY n.id",
+      [email]
+    );
 
-  notifications
-    .filter((notification) => notification.userEmail === userEmail)
-    .forEach((notification) => {
-      notification.read = true;
+    return res.json({
+      success: true,
+      notifications: rows.map(formatNotification),
     });
+  } catch (error) {
+    return next(error);
+  }
+});
 
-  res.json({
-    success: true,
-  });
+router.patch("/notifications/:id/read", async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await run(
+      "UPDATE notifications SET is_read = 1 WHERE id = ?",
+      [id]
+    );
+
+    if (!result.changes) {
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found.",
+      });
+    }
+
+    const notification = await getNotification(id);
+    return res.json({ success: true, notification });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch("/notifications/user/:userEmail/read-all", async (req, res, next) => {
+  try {
+    const email = req.params.userEmail.trim().toLowerCase();
+
+    await run(
+      `UPDATE notifications
+       SET is_read = 1
+       WHERE user_id = (SELECT id FROM users WHERE email = ? COLLATE NOCASE)
+         AND is_read = 0`,
+      [email]
+    );
+
+    return res.json({ success: true });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 module.exports = router;
 module.exports.notifyQueueJoined = notifyQueueJoined;
 module.exports.notifyAlmostReady = notifyAlmostReady;
-module.exports.notifications = notifications;

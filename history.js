@@ -1,45 +1,77 @@
 const express = require("express");
+const { run, get, all } = require("./database");
 
 const router = express.Router();
-const history = [];
-let nextId = 1;
 
-function createHistory(userEmail, serviceName) {
-  const record = {
-    id: nextId++,
-    userEmail: userEmail.toLowerCase().trim(),
-    serviceName: serviceName.trim(),
-    joinedAt: new Date().toISOString(),
-    completedAt: null,
-    outcome: "active",
-  };
+const selectRecord = `
+  SELECT h.id,
+         LOWER(u.email) AS userEmail,
+         h.service_name AS serviceName,
+         h.joined_at AS joinedAt,
+         h.completed_at AS completedAt,
+         h.outcome
+  FROM history AS h
+  JOIN users AS u ON u.id = h.user_id
+`;
 
-  history.push(record);
-  return record;
+function getRecord(id) {
+  return get(selectRecord + " WHERE h.id = ?", [id]);
 }
 
-function completeHistory(userEmail, serviceName, outcome) {
-  const record = [...history]
-    .reverse()
-    .find(
-      (item) =>
-        item.userEmail === userEmail.toLowerCase().trim() &&
-        item.serviceName === serviceName.trim() &&
-        item.outcome === "active"
-    );
+async function createHistory(userEmail, serviceName) {
+  const email = userEmail.trim().toLowerCase();
+  const user = await get(
+    "SELECT id FROM users WHERE email = ? COLLATE NOCASE",
+    [email]
+  );
 
-  if (!record) {
-    return null;
+  if (!user) {
+    const error = new Error("User not found.");
+    error.status = 404;
+    throw error;
   }
 
-  record.outcome = outcome;
-  record.completedAt = new Date().toISOString();
+  const result = await run(
+    `INSERT INTO history (user_id, service_name, joined_at, completed_at, outcome)
+     VALUES (?, ?, ?, NULL, 'active')`,
+    [user.id, serviceName.trim(), new Date().toISOString()]
+  );
 
-  return record;
+  return getRecord(result.id);
 }
 
-router.post("/history", (req, res) => {
-  const { userEmail, serviceName } = req.body;
+async function completeHistory(userEmail, serviceName, outcome) {
+  if (outcome !== "served" && outcome !== "left") {
+    throw new Error("Outcome must be served or left.");
+  }
+
+  const updated = await get(
+    `UPDATE history
+     SET outcome = ?, completed_at = ?
+     WHERE id = (
+       SELECT h.id
+       FROM history AS h
+       JOIN users AS u ON u.id = h.user_id
+       WHERE u.email = ? COLLATE NOCASE
+         AND h.service_name = ?
+         AND h.outcome = 'active'
+       ORDER BY h.id DESC
+       LIMIT 1
+     )
+     RETURNING id`,
+    [
+      outcome,
+      new Date().toISOString(),
+      userEmail.trim().toLowerCase(),
+      serviceName.trim(),
+    ]
+  );
+
+  return updated ? getRecord(updated.id) : null;
+}
+
+router.post("/history", async (req, res, next) => {
+  const { userEmail, serviceName } = req.body || {};
 
   if (!userEmail || !serviceName) {
     return res.status(400).json({
@@ -48,10 +80,7 @@ router.post("/history", (req, res) => {
     });
   }
 
-  if (
-    typeof userEmail !== "string" ||
-    typeof serviceName !== "string"
-  ) {
+  if (typeof userEmail !== "string" || typeof serviceName !== "string") {
     return res.status(400).json({
       success: false,
       message: "History fields must be text.",
@@ -61,6 +90,7 @@ router.post("/history", (req, res) => {
   if (
     !userEmail.includes("@") ||
     userEmail.length > 254 ||
+    !serviceName.trim() ||
     serviceName.length > 100
   ) {
     return res.status(400).json({
@@ -69,30 +99,37 @@ router.post("/history", (req, res) => {
     });
   }
 
-  const record = createHistory(userEmail, serviceName);
+  try {
+    const record = await createHistory(userEmail, serviceName);
+    return res.status(201).json({ success: true, record });
+  } catch (error) {
+    if (error.status === 404) {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
 
-  res.status(201).json({
-    success: true,
-    record,
-  });
+    return next(error);
+  }
 });
 
-router.get("/history/:userEmail", (req, res) => {
-  const userEmail = req.params.userEmail.toLowerCase().trim();
+router.get("/history/:userEmail", async (req, res, next) => {
+  try {
+    const email = req.params.userEmail.trim().toLowerCase();
+    const history = await all(
+      selectRecord + " WHERE u.email = ? COLLATE NOCASE ORDER BY h.id",
+      [email]
+    );
 
-  const userHistory = history.filter(
-    (record) => record.userEmail === userEmail
-  );
-
-  res.json({
-    success: true,
-    history: userHistory,
-  });
+    return res.json({ success: true, history });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-router.patch("/history/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const { outcome } = req.body;
+router.patch("/history/:id", async (req, res, next) => {
+  const { outcome } = req.body || {};
 
   if (outcome !== "served" && outcome !== "left") {
     return res.status(400).json({
@@ -101,25 +138,27 @@ router.patch("/history/:id", (req, res) => {
     });
   }
 
-  const record = history.find((item) => item.id === id);
+  try {
+    const id = Number(req.params.id);
+    const result = await run(
+      "UPDATE history SET outcome = ?, completed_at = ? WHERE id = ?",
+      [outcome, new Date().toISOString(), id]
+    );
 
-  if (!record) {
-    return res.status(404).json({
-      success: false,
-      message: "History record not found.",
-    });
+    if (!result.changes) {
+      return res.status(404).json({
+        success: false,
+        message: "History record not found.",
+      });
+    }
+
+    const record = await getRecord(id);
+    return res.json({ success: true, record });
+  } catch (error) {
+    return next(error);
   }
-
-  record.outcome = outcome;
-  record.completedAt = new Date().toISOString();
-
-  res.json({
-    success: true,
-    record,
-  });
 });
 
 module.exports = router;
 module.exports.createHistory = createHistory;
 module.exports.completeHistory = completeHistory;
-module.exports.history = history;
