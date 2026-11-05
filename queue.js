@@ -1,20 +1,16 @@
 const express = require("express");
+const { db } = require("./database");
 const { estimateWait } = require("./waitTime");
-const { notifyQueueJoined, notifyAlmostReady } = require("./notifications");
-const { createHistory, completeHistory } = require("./history");
 
 const router = express.Router();
 
-const services = [
-  { id: "advising", name: "Academic Advising", duration: 10 },
-  { id: "financial-aid", name: "Financial Aid", duration: 15 },
-  { id: "registration", name: "Registration", duration: 8 },
-  { id: "transcripts", name: "Transcript Request", duration: 5 },
-  { id: "student-id", name: "Student ID Services", duration: 5 },
-];
-
-const queues = [];
-let nextId = 1;
+const serviceAliases = {
+  advising: "Academic Advising",
+  "financial-aid": "Financial Aid",
+  registration: "Registration",
+  transcripts: "Transcript Request",
+  "student-id": "Student ID Services"
+};
 
 function validEmail(email) {
   return (
@@ -24,379 +20,508 @@ function validEmail(email) {
   );
 }
 
-function findService(id) {
-  return services.find((service) => service.id === id);
+async function findService(id) {
+  const name = serviceAliases[id];
+
+  if (name) {
+    const [rows] = await db.execute(
+      "SELECT * FROM Service WHERE service_name = ?",
+      [name]
+    );
+    return rows[0] || null;
+  }
+
+  const [rows] = await db.execute(
+    "SELECT * FROM Service WHERE service_id = ?",
+    [id]
+  );
+
+  return rows[0] || null;
 }
 
-function waitingFor(serviceId) {
-  return queues.filter((entry) => entry.serviceId === serviceId);
+async function getQueue(serviceId) {
+  const [rows] = await db.execute(
+    "SELECT * FROM Queue WHERE service_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1",
+    [serviceId]
+  );
+
+  if (rows.length) return rows[0];
+
+  const [result] = await db.execute(
+    "INSERT INTO Queue (service_id, status) VALUES (?, 'open')",
+    [serviceId]
+  );
+
+  const [created] = await db.execute(
+    "SELECT * FROM Queue WHERE queue_id = ?",
+    [result.insertId]
+  );
+
+  return created[0];
 }
 
-function queueDetails(service) {
-  return waitingFor(service.id).map((entry, index) => ({
-    id: entry.id,
-    userEmail: entry.userEmail,
-    serviceId: entry.serviceId,
-    joinedAt: entry.joinedAt,
+async function getWaiting(queueId) {
+  const [rows] = await db.execute(
+    `SELECT qe.entry_id, qe.user_id, qe.position,
+            qe.join_time, uc.email
+     FROM QueueEntry qe
+     JOIN UserCredentials uc ON qe.user_id = uc.user_id
+     WHERE qe.queue_id = ? AND qe.status = 'waiting'
+     ORDER BY qe.position ASC`,
+    [queueId]
+  );
+
+  return rows;
+}
+
+async function queueDetails(service, queue) {
+  const waiting = await getWaiting(queue.queue_id);
+
+  return waiting.map((entry, index) => ({
+    id: entry.entry_id,
+    userEmail: entry.email,
+    serviceId: service.service_id,
+    joinedAt: entry.join_time,
     position: index + 1,
-    estimatedWait: estimateWait(index + 1, service.duration),
+    estimatedWait: estimateWait(
+      index + 1,
+      service.expected_duration
+    )
   }));
 }
 
-async function updateAlmostReady(service) {
-  const waiting = waitingFor(service.id);
+async function updatePositions(queueId) {
+  const waiting = await getWaiting(queueId);
 
-  for (let index = 0; index < waiting.length; index += 1) {
-    const entry = waiting[index];
-    const position = index + 1;
-
-    if (
-      position <= 2 &&
-      entry.lastPosition > 2 &&
-      !entry.nearFrontNotified
-    ) {
-      await notifyAlmostReady(
-        entry.userEmail,
-        service.name,
-        position,
-        estimateWait(position, service.duration)
-      );
-
-      entry.nearFrontNotified = true;
-    }
-
-    entry.lastPosition = position;
+  for (let i = 0; i < waiting.length; i++) {
+    await db.execute(
+      "UPDATE QueueEntry SET position = ? WHERE entry_id = ?",
+      [i + 1, waiting[i].entry_id]
+    );
   }
 }
 
-router.get("/queues/services", (req, res) => {
-  res.json({
-    success: true,
-    services: services.map((service) => {
-      const waiting = waitingFor(service.id).length;
+async function addNotification(userId, type, message) {
+  await db.execute(
+    `INSERT INTO Notification
+     (user_id, notification_type, message, status)
+     VALUES (?, ?, ?, 'sent')`,
+    [userId, type, message]
+  );
+}
 
-      return {
-        ...service,
-        waiting,
-        estimatedWait: waiting * service.duration,
-      };
-    }),
-  });
+async function updateAlmostReady(service, queue) {
+  const waiting = await getWaiting(queue.queue_id);
+
+  for (let i = 0; i < waiting.length; i++) {
+    const position = i + 1;
+
+    if (position <= 2) {
+      await addNotification(
+        waiting[i].user_id,
+        "almost_ready",
+        `${service.service_name}: position ${position}, estimated wait ${estimateWait(position, service.expected_duration)} minutes. You are almost ready.`
+      );
+    }
+  }
+}
+
+router.get("/queues/services", async (req, res) => {
+  try {
+    const [services] = await db.execute(
+      "SELECT * FROM Service"
+    );
+
+    const result = [];
+
+    for (const service of services) {
+      const queue = await getQueue(service.service_id);
+      const waiting = await getWaiting(queue.queue_id);
+
+      result.push({
+        id: service.service_id,
+        name: service.service_name,
+        duration: service.expected_duration,
+        waiting: waiting.length,
+        estimatedWait: waiting.length * service.expected_duration
+      });
+    }
+
+    res.json({
+      success: true,
+      services: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve queue services."
+    });
+  }
 });
 
-router.get("/queues/user/:userEmail", (req, res) => {
-  if (!validEmail(req.params.userEmail)) {
-    return res.status(400).json({
+router.get("/queues/user/:userEmail", async (req, res) => {
+  try {
+    if (!validEmail(req.params.userEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid email."
+      });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT qe.*, s.service_name, s.expected_duration
+       FROM QueueEntry qe
+       JOIN Queue q ON qe.queue_id = q.queue_id
+       JOIN Service s ON q.service_id = s.service_id
+       JOIN UserCredentials uc ON qe.user_id = uc.user_id
+       WHERE uc.email = ? AND qe.status = 'waiting'
+       ORDER BY qe.join_time DESC LIMIT 1`,
+      [req.params.userEmail.toLowerCase().trim()]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "User is not in a queue."
+      });
+    }
+
+    const entry = rows[0];
+
+    return res.json({
+      success: true,
+      service: {
+        id: entry.service_id,
+        name: entry.service_name,
+        duration: entry.expected_duration
+      },
+      entry: {
+        id: entry.entry_id,
+        userEmail: req.params.userEmail,
+        position: entry.position,
+        joinedAt: entry.join_time,
+        estimatedWait: estimateWait(
+          entry.position,
+          entry.expected_duration
+        )
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      message: "Enter a valid email.",
+      message: "Could not retrieve user queue."
     });
   }
-
-  const email = req.params.userEmail.toLowerCase().trim();
-
-  const entry = queues.find(
-    (item) => item.userEmail === email
-  );
-
-  if (!entry) {
-    return res.status(404).json({
-      success: false,
-      message: "User is not in a queue.",
-    });
-  }
-
-  const service = findService(entry.serviceId);
-  const position = waitingFor(service.id).indexOf(entry) + 1;
-
-  return res.json({
-    success: true,
-    service,
-    entry: { ...queueDetails(service)[position - 1] },
-  });
 });
 
 router.post("/queues/join", async (req, res) => {
   try {
     const { userEmail, serviceId } = req.body || {};
 
-    if (
-      !validEmail(userEmail) ||
-      typeof serviceId !== "string" ||
-      !serviceId.trim()
-    ) {
+    if (!validEmail(userEmail) || !serviceId) {
       return res.status(400).json({
         success: false,
-        message: "A valid email and service ID are required.",
+        message: "A valid email and service ID are required."
       });
     }
 
-    const service = findService(serviceId);
+    const service = await findService(serviceId);
 
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: "Service not found.",
+        message: "Service not found."
       });
     }
 
     const email = userEmail.toLowerCase().trim();
 
-    if (
-      queues.some(
-        (entry) => entry.userEmail === email
-      )
-    ) {
-      return res.status(409).json({
+    const [users] = await db.execute(
+      "SELECT user_id FROM UserCredentials WHERE email = ?",
+      [email]
+    );
+
+    if (!users.length) {
+      return res.status(404).json({
         success: false,
-        message: "User is already in a queue.",
+        message: "User not found."
       });
     }
 
-    const position =
-      waitingFor(service.id).length + 1;
+    const userId = users[0].user_id;
+    const queue = await getQueue(service.service_id);
 
-    const entry = {
-      id: nextId++,
-      userEmail: email,
-      serviceId: service.id,
-      joinedAt: new Date().toISOString(),
-      lastPosition: position,
-      nearFrontNotified: false,
-    };
-
-    await createHistory(
-      email,
-      service.name
+    const [existing] = await db.execute(
+      `SELECT entry_id FROM QueueEntry
+       WHERE user_id = ? AND status = 'waiting'`,
+      [userId]
     );
 
-    await notifyQueueJoined(
-      email,
-      service.name,
-      position,
-      estimateWait(position, service.duration)
+    if (existing.length) {
+      return res.status(409).json({
+        success: false,
+        message: "User is already in a queue."
+      });
+    }
+
+    const waiting = await getWaiting(queue.queue_id);
+    const position = waiting.length + 1;
+
+    const [result] = await db.execute(
+      `INSERT INTO QueueEntry
+       (queue_id, user_id, position, status)
+       VALUES (?, ?, ?, 'waiting')`,
+      [queue.queue_id, userId, position]
     );
 
-    queues.push(entry);
+    await db.execute(
+      `INSERT INTO History
+       (user_id, service_id, outcome)
+       VALUES (?, ?, 'active')`,
+      [userId, service.service_id]
+    );
+
+    await addNotification(
+      userId,
+      "queue_joined",
+      `You joined ${service.service_name}. Position: ${position}. Estimated wait: ${estimateWait(position, service.expected_duration)} minutes.`
+    );
+
+    const [entries] = await db.execute(
+      "SELECT join_time FROM QueueEntry WHERE entry_id = ?",
+      [result.insertId]
+    );
 
     return res.status(201).json({
       success: true,
       message: "Joined queue.",
-      entry: queueDetails(service)[position - 1],
+      entry: {
+        id: result.insertId,
+        userEmail: email,
+        serviceId: service.service_id,
+        joinedAt: entries[0].join_time,
+        position,
+        estimatedWait: estimateWait(
+          position,
+          service.expected_duration
+        )
+      }
     });
   } catch (error) {
-    if (error.message === "User not found.") {
-      return res.status(404).json({
-        success: false,
-        message: "User not found.",
-      });
-    }
-
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
-      message: "Could not join queue.",
+      message: "Could not join queue."
     });
   }
 });
 
-router.delete(
-  "/queues/:serviceId/leave",
-  async (req, res) => {
-    try {
-      const service = findService(
-        req.params.serviceId
-      );
-
-      if (!service) {
-        return res.status(404).json({
-          success: false,
-          message: "Service not found.",
-        });
-      }
-
-      const { userEmail } = req.body || {};
-
-      if (!validEmail(userEmail)) {
-        return res.status(400).json({
-          success: false,
-          message: "Enter a valid email.",
-        });
-      }
-
-      const email =
-        userEmail.toLowerCase().trim();
-
-      const index = queues.findIndex(
-        (entry) =>
-          entry.userEmail === email &&
-          entry.serviceId === service.id
-      );
-
-      if (index === -1) {
-        return res.status(404).json({
-          success: false,
-          message: "User is not in this queue.",
-        });
-      }
-
-      await completeHistory(
-        email,
-        service.name,
-        "left"
-      );
-
-      queues.splice(index, 1);
-
-      await updateAlmostReady(service);
-
-      return res.json({
-        success: true,
-        message: "Left queue.",
-        queue: queueDetails(service),
-      });
-    } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: "Could not leave queue.",
-      });
-    }
-  }
-);
-
-router.get(
-  "/queues/:serviceId/wait-time",
-  (req, res) => {
-    const service = findService(
-      req.params.serviceId
-    );
+router.delete("/queues/:serviceId/leave", async (req, res) => {
+  try {
+    const service = await findService(req.params.serviceId);
 
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: "Service not found.",
+        message: "Service not found."
       });
     }
 
-    let position =
-      waitingFor(service.id).length + 1;
+    const { userEmail } = req.body || {};
+
+    if (!validEmail(userEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid email."
+      });
+    }
+
+    const email = userEmail.toLowerCase().trim();
+    const queue = await getQueue(service.service_id);
+
+    const [entries] = await db.execute(
+      `SELECT qe.entry_id, qe.user_id
+       FROM QueueEntry qe
+       JOIN UserCredentials uc ON qe.user_id = uc.user_id
+       WHERE qe.queue_id = ? AND uc.email = ?
+       AND qe.status = 'waiting'`,
+      [queue.queue_id, email]
+    );
+
+    if (!entries.length) {
+      return res.status(404).json({
+        success: false,
+        message: "User is not in this queue."
+      });
+    }
+
+    const entry = entries[0];
+
+    await db.execute(
+      "UPDATE QueueEntry SET status = 'canceled' WHERE entry_id = ?",
+      [entry.entry_id]
+    );
+
+    await db.execute(
+      `UPDATE History SET outcome = 'left', completed_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND service_id = ? AND outcome = 'active'
+       ORDER BY history_id DESC LIMIT 1`,
+      [entry.user_id, service.service_id]
+    );
+
+    await updatePositions(queue.queue_id);
+    await updateAlmostReady(service, queue);
+
+    return res.json({
+      success: true,
+      message: "Left queue.",
+      queue: await queueDetails(service, queue)
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not leave queue."
+    });
+  }
+});
+
+router.get("/queues/:serviceId/wait-time", async (req, res) => {
+  try {
+    const service = await findService(req.params.serviceId);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found."
+      });
+    }
+
+    const queue = await getQueue(service.service_id);
+    const waiting = await getWaiting(queue.queue_id);
+    let position = waiting.length + 1;
 
     if (req.query.userEmail !== undefined) {
       if (!validEmail(req.query.userEmail)) {
         return res.status(400).json({
           success: false,
-          message: "Enter a valid email.",
+          message: "Enter a valid email."
         });
       }
 
-      const email =
-        req.query.userEmail
-          .toLowerCase()
-          .trim();
+      const index = waiting.findIndex(
+        entry => entry.email === req.query.userEmail.toLowerCase().trim()
+      );
 
-      position =
-        waitingFor(service.id).findIndex(
-          (entry) =>
-            entry.userEmail === email
-        ) + 1;
-
-      if (position === 0) {
+      if (index === -1) {
         return res.status(404).json({
           success: false,
-          message: "User is not in this queue.",
+          message: "User is not in this queue."
         });
       }
+
+      position = index + 1;
     }
 
-    return res.json({
+    res.json({
       success: true,
-      serviceId: service.id,
+      serviceId: service.service_id,
       position,
       estimatedWait: estimateWait(
         position,
-        service.duration
-      ),
+        service.expected_duration
+      )
     });
-  }
-);
-
-router.get("/queues/:serviceId", (req, res) => {
-  const service = findService(
-    req.params.serviceId
-  );
-
-  if (!service) {
-    return res.status(404).json({
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      message: "Service not found.",
+      message: "Could not calculate wait time."
     });
   }
-
-  return res.json({
-    success: true,
-    service,
-    queue: queueDetails(service),
-  });
 });
 
-router.post(
-  "/queues/:serviceId/next",
-  async (req, res) => {
-    try {
-      const service = findService(
-        req.params.serviceId
-      );
+router.get("/queues/:serviceId", async (req, res) => {
+  try {
+    const service = await findService(req.params.serviceId);
 
-      if (!service) {
-        return res.status(404).json({
-          success: false,
-          message: "Service not found.",
-        });
-      }
-
-      const waiting = waitingFor(
-        service.id
-      );
-
-      if (!waiting.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Queue is empty.",
-        });
-      }
-
-      const next = waiting[0];
-
-      await completeHistory(
-        next.userEmail,
-        service.name,
-        "served"
-      );
-
-      queues.splice(
-        queues.indexOf(next),
-        1
-      );
-
-      await updateAlmostReady(service);
-
-      return res.json({
-        success: true,
-        message: "Next user served.",
-        served: {
-          id: next.id,
-          userEmail: next.userEmail,
-          serviceId: service.id,
-        },
-        queue: queueDetails(service),
-      });
-    } catch (error) {
-      return res.status(500).json({
+    if (!service) {
+      return res.status(404).json({
         success: false,
-        message: "Could not serve next user.",
+        message: "Service not found."
       });
     }
+
+    const queue = await getQueue(service.service_id);
+
+    res.json({
+      success: true,
+      service: {
+        id: service.service_id,
+        name: service.service_name,
+        duration: service.expected_duration
+      },
+      queue: await queueDetails(service, queue)
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve queue."
+    });
   }
-);
+});
+
+router.post("/queues/:serviceId/next", async (req, res) => {
+  try {
+    const service = await findService(req.params.serviceId);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found."
+      });
+    }
+
+    const queue = await getQueue(service.service_id);
+    const waiting = await getWaiting(queue.queue_id);
+
+    if (!waiting.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Queue is empty."
+      });
+    }
+
+    const next = waiting[0];
+
+    await db.execute(
+      "UPDATE QueueEntry SET status = 'served' WHERE entry_id = ?",
+      [next.entry_id]
+    );
+
+    await db.execute(
+      `UPDATE History SET outcome = 'served', completed_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND service_id = ? AND outcome = 'active'
+       ORDER BY history_id DESC LIMIT 1`,
+      [next.user_id, service.service_id]
+    );
+
+    await updatePositions(queue.queue_id);
+    await updateAlmostReady(service, queue);
+
+    return res.json({
+      success: true,
+      message: "Next user served.",
+      served: {
+        id: next.entry_id,
+        userEmail: next.email,
+        serviceId: service.service_id
+      },
+      queue: await queueDetails(service, queue)
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not serve next user."
+    });
+  }
+});
 
 module.exports = router;
-module.exports.queues = queues;
-module.exports.services = services;
