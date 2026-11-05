@@ -1,5 +1,6 @@
 const express = require("express");
 const session = require("express-session");
+const { db } = require("./database");
 
 const authRoutes = require("./auth");
 const notificationRoutes = require("./notifications");
@@ -65,9 +66,7 @@ app.use("/api", queueRoutes);
 
 app.get("/api/session", (req, res) => {
   if (!req.session || !req.session.user) {
-    return res.json({
-      authenticated: false
-    });
+    return res.json({ authenticated: false });
   }
 
   return res.json({
@@ -115,9 +114,6 @@ app.post("/api/logout", (req, res) => {
   });
 });
 
-let services = [];
-let nextId = 1;
-
 function validateService(data) {
   const errors = [];
 
@@ -148,52 +144,74 @@ function validateService(data) {
   return errors;
 }
 
-app.get("/api/services", (req, res) => {
-  res.json(services);
+const serviceQuery = `
+  SELECT
+    service_id AS id,
+    service_name AS serviceName,
+    description,
+    expected_duration AS duration,
+    priority
+  FROM Service
+`;
+
+app.get("/api/services", async (req, res) => {
+  try {
+    const [services] = await db.execute(serviceQuery);
+    res.json(services);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve services."
+    });
+  }
 });
 
-app.post("/api/services", (req, res) => {
+app.post("/api/services", async (req, res) => {
   const errors = validateService(req.body);
 
   if (errors.length > 0) {
     return res.status(400).json({ errors });
   }
 
-  const name = req.body.serviceName.trim();
+  try {
+    const [result] = await db.execute(
+      `INSERT INTO Service
+       (service_name, description, expected_duration, priority)
+       VALUES (?, ?, ?, ?)`,
+      [
+        req.body.serviceName.trim(),
+        req.body.description.trim(),
+        req.body.duration,
+        req.body.priority
+      ]
+    );
 
-  if (
-    services.some(
-      (service) =>
-        service.serviceName.toLowerCase() === name.toLowerCase()
-    )
-  ) {
-    return res.status(409).json({
-      errors: ["A service with this name already exists."]
+    const [rows] = await db.execute(
+      `${serviceQuery} WHERE service_id = ?`,
+      [result.insertId]
+    );
+
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        errors: ["A service with this name already exists."]
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not create service."
     });
   }
-
-  const service = {
-    id: nextId++,
-    serviceName: name,
-    description: req.body.description.trim(),
-    duration: req.body.duration,
-    priority: req.body.priority
-  };
-
-  services.push(service);
-
-  return res.status(201).json(service);
 });
 
-app.put("/api/services/:id", (req, res) => {
+app.put("/api/services/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const index = services.findIndex(
-    (service) => service.id === id
-  );
 
-  if (index === -1) {
-    return res.status(404).json({
-      errors: ["Service not found."]
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({
+      errors: ["Invalid service ID."]
     });
   }
 
@@ -203,45 +221,92 @@ app.put("/api/services/:id", (req, res) => {
     return res.status(400).json({ errors });
   }
 
-  const name = req.body.serviceName.trim();
+  try {
+    const [result] = await db.execute(
+      `UPDATE Service
+       SET service_name = ?,
+           description = ?,
+           expected_duration = ?,
+           priority = ?
+       WHERE service_id = ?`,
+      [
+        req.body.serviceName.trim(),
+        req.body.description.trim(),
+        req.body.duration,
+        req.body.priority,
+        id
+      ]
+    );
 
-  if (
-    services.some(
-      (service) =>
-        service.id !== id &&
-        service.serviceName.toLowerCase() === name.toLowerCase()
-    )
-  ) {
-    return res.status(409).json({
-      errors: ["A service with this name already exists."]
+    if (result.affectedRows === 0) {
+      const [existing] = await db.execute(
+        "SELECT service_id FROM Service WHERE service_id = ?",
+        [id]
+      );
+
+      if (existing.length === 0) {
+        return res.status(404).json({
+          errors: ["Service not found."]
+        });
+      }
+    }
+
+    const [rows] = await db.execute(
+      `${serviceQuery} WHERE service_id = ?`,
+      [id]
+    );
+
+    return res.json(rows[0]);
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        errors: ["A service with this name already exists."]
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not update service."
     });
   }
-
-  services[index] = {
-    id,
-    serviceName: name,
-    description: req.body.description.trim(),
-    duration: req.body.duration,
-    priority: req.body.priority
-  };
-
-  return res.json(services[index]);
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "OK",
-    success: true,
-    message: "QueueSmart server is running."
-  });
+app.get("/api/health", async (req, res) => {
+  try {
+    await db.execute("SELECT 1");
+
+    res.json({
+      status: "OK",
+      success: true,
+      database: "Connected",
+      message: "QueueSmart server is running."
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "ERROR",
+      success: false,
+      database: "Disconnected",
+      message: "Database connection failed."
+    });
+  }
 });
 
 if (process.env.NODE_ENV === "test") {
-  app.delete("/api/test/reset", (req, res) => {
-    services = [];
-    nextId = 1;
+  app.delete("/api/test/reset", async (req, res) => {
+    try {
+      await db.execute("DELETE FROM QueueEntry");
+      await db.execute("DELETE FROM Queue");
+      await db.execute("DELETE FROM History");
+      await db.execute("DELETE FROM Notification");
+      await db.execute("DELETE FROM Service");
 
-    return res.sendStatus(204);
+      return res.sendStatus(204);
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Could not reset test data."
+      });
+    }
   });
 }
 
