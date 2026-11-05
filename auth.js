@@ -29,40 +29,32 @@ router.post("/register", async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    db.run(
-      "INSERT INTO users (email, password) VALUES (?, ?)",
-      [normalizedEmail, hashedPassword],
-      function (error) {
-        if (error) {
-          if (error.message.includes("UNIQUE")) {
-            return res.status(409).json({
-              success: false,
-              message: "An account with this email already exists."
-            });
-          }
-
-          return res.status(500).json({
-            success: false,
-            message: "Could not create account."
-          });
-        }
-
-        return res.status(201).json({
-          success: true,
-          message: "Registration successful.",
-          role: "User"
-        });
-      }
+    await db.execute(
+      "INSERT INTO UserCredentials (email, password) VALUES (?, ?)",
+      [normalizedEmail, hashedPassword]
     );
+
+    return res.status(201).json({
+      success: true,
+      message: "Registration successful.",
+      role: "User"
+    });
   } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        success: false,
+        message: "An account with this email already exists."
+      });
+    }
+
     return res.status(500).json({
       success: false,
-      message: "Registration failed."
+      message: "Could not create account."
     });
   }
 });
 
-router.post("/login", (req, res) => {
+router.post("/login", async (req, res) => {
   const { email, password } = req.body || {};
 
   if (
@@ -77,62 +69,56 @@ router.post("/login", (req, res) => {
     });
   }
 
-  db.get(
-    "SELECT * FROM users WHERE email = ?",
-    [email.trim().toLowerCase()],
-    async (error, user) => {
+  try {
+    const [rows] = await db.execute(
+      "SELECT * FROM UserCredentials WHERE email = ?",
+      [email.trim().toLowerCase()]
+    );
+
+    const user = rows[0];
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password."
+      });
+    }
+
+    req.session.regenerate((error) => {
       if (error) {
         return res.status(500).json({
           success: false,
-          message: "Login failed."
+          message: "Could not establish a login session."
         });
       }
 
-      try {
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-          return res.status(401).json({
+      req.session.user = {
+        id: user.user_id,
+        email: user.email,
+        role: user.role
+      };
+
+      req.session.save((saveError) => {
+        if (saveError) {
+          return res.status(500).json({
             success: false,
-            message: "Invalid email or password."
+            message: "Could not save login session."
           });
         }
 
-        req.session.regenerate((sessionError) => {
-          if (sessionError) {
-            return res.status(500).json({
-              success: false,
-              message: "Could not establish a login session."
-            });
-          }
-
-          req.session.user = {
-            id: user.id || user.user_id,
-            email: user.email,
-            role: user.role
-          };
-
-          req.session.save((saveError) => {
-            if (saveError) {
-              return res.status(500).json({
-                success: false,
-                message: "Could not save login session."
-              });
-            }
-
-            return res.json({
-              success: true,
-              message: "Login successful.",
-              role: user.role
-            });
-          });
+        return res.json({
+          success: true,
+          message: "Login successful.",
+          role: user.role
         });
-      } catch (compareError) {
-        return res.status(500).json({
-          success: false,
-          message: "Login failed."
-        });
-      }
-    }
-  );
+      });
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Login failed."
+    });
+  }
 });
 
 module.exports = router;
