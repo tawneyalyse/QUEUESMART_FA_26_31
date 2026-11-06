@@ -102,6 +102,18 @@ async function updatePositions(queueId) {
 }
 
 async function addNotification(userId, type, message) {
+  const [existing] = await db.execute(
+    `SELECT notification_id
+     FROM Notification
+     WHERE user_id = ?
+       AND notification_type = ?
+       AND message = ?
+     LIMIT 1`,
+    [userId, type, message]
+  );
+
+  if (existing.length) return;
+
   await db.execute(
     `INSERT INTO Notification
      (user_id, notification_type, message, status)
@@ -152,6 +164,7 @@ router.get("/queues/services", async (req, res) => {
       services: result
     });
   } catch (error) {
+    console.error("Get queue services error:", error);
     res.status(500).json({
       success: false,
       message: "Could not retrieve queue services."
@@ -169,13 +182,14 @@ router.get("/queues/user/:userEmail", async (req, res) => {
     }
 
     const [rows] = await db.execute(
-      `SELECT qe.*, s.service_name, s.expected_duration
+      `SELECT qe.*, s.service_id, s.service_name, s.expected_duration
        FROM QueueEntry qe
        JOIN Queue q ON qe.queue_id = q.queue_id
        JOIN Service s ON q.service_id = s.service_id
        JOIN UserCredentials uc ON qe.user_id = uc.user_id
        WHERE uc.email = ? AND qe.status = 'waiting'
-       ORDER BY qe.join_time DESC LIMIT 1`,
+       ORDER BY qe.join_time DESC
+       LIMIT 1`,
       [req.params.userEmail.toLowerCase().trim()]
     );
 
@@ -207,6 +221,7 @@ router.get("/queues/user/:userEmail", async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Get user queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not retrieve user queue."
@@ -308,6 +323,7 @@ router.post("/queues/join", async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Join queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not join queue."
@@ -342,8 +358,9 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
       `SELECT qe.entry_id, qe.user_id
        FROM QueueEntry qe
        JOIN UserCredentials uc ON qe.user_id = uc.user_id
-       WHERE qe.queue_id = ? AND uc.email = ?
-       AND qe.status = 'waiting'`,
+       WHERE qe.queue_id = ?
+         AND uc.email = ?
+         AND qe.status = 'waiting'`,
       [queue.queue_id, email]
     );
 
@@ -362,9 +379,13 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
     );
 
     await db.execute(
-      `UPDATE History SET outcome = 'left', completed_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND service_id = ? AND outcome = 'active'
-       ORDER BY history_id DESC LIMIT 1`,
+      `UPDATE History
+       SET outcome = 'left', completed_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?
+         AND service_id = ?
+         AND outcome = 'active'
+       ORDER BY history_id DESC
+       LIMIT 1`,
       [entry.user_id, service.service_id]
     );
 
@@ -377,6 +398,7 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
       queue: await queueDetails(service, queue)
     });
   } catch (error) {
+    console.error("Leave queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not leave queue."
@@ -431,6 +453,7 @@ router.get("/queues/:serviceId/wait-time", async (req, res) => {
       )
     });
   } catch (error) {
+    console.error("Wait time error:", error);
     res.status(500).json({
       success: false,
       message: "Could not calculate wait time."
@@ -461,6 +484,7 @@ router.get("/queues/:serviceId", async (req, res) => {
       queue: await queueDetails(service, queue)
     });
   } catch (error) {
+    console.error("Get queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not retrieve queue."
@@ -497,9 +521,13 @@ router.post("/queues/:serviceId/next", async (req, res) => {
     );
 
     await db.execute(
-      `UPDATE History SET outcome = 'served', completed_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND service_id = ? AND outcome = 'active'
-       ORDER BY history_id DESC LIMIT 1`,
+      `UPDATE History
+       SET outcome = 'served', completed_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?
+         AND service_id = ?
+         AND outcome = 'active'
+       ORDER BY history_id DESC
+       LIMIT 1`,
       [next.user_id, service.service_id]
     );
 
@@ -517,6 +545,7 @@ router.post("/queues/:serviceId/next", async (req, res) => {
       queue: await queueDetails(service, queue)
     });
   } catch (error) {
+    console.error("Serve next user error:", error);
     res.status(500).json({
       success: false,
       message: "Could not serve next user."
