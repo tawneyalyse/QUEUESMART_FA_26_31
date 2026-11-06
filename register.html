@@ -19,6 +19,16 @@
       <p id="feedback" role="status"></p>
 
       <form id="auth-form">
+        <label for="fullName">Full Name</label>
+        <input
+          id="fullName"
+          name="fullName"
+          type="text"
+          required
+          maxlength="150"
+          autocomplete="name"
+        />
+
         <label for="email">Email</label>
         <input
           id="email"
@@ -27,6 +37,15 @@
           required
           maxlength="254"
           autocomplete="email"
+        />
+
+        <label for="contactInfo">Contact Information (Optional)</label>
+        <input
+          id="contactInfo"
+          name="contactInfo"
+          type="text"
+          maxlength="100"
+          autocomplete="tel"
         />
 
         <label for="password">Password</label>
@@ -42,7 +61,7 @@
 
         <p>Use at least 8 characters.</p>
 
-        <button>Register</button>
+        <button type="submit">Register</button>
       </form>
 
       <p>Already registered? <a href="index.html">Login</a></p>
