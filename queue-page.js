@@ -137,11 +137,16 @@ emailInput.addEventListener("change", async () => {
 });
 
 (async () => {
-  emailInput.value = sessionStorage.getItem("queuesmart-email") || "";
+  emailInput.value = "";
   try {
+    const session = await queueRequest("/api/session");
+    if (!session.authenticated) throw new Error("Please log in before joining a queue.");
+    emailInput.value = session.user.email;
+    emailInput.readOnly = true;
     await loadServices();
     await loadCurrentQueue();
     await refreshWait();
+    setInterval(() => loadCurrentQueue().then(refreshWait).catch(error => showMessage(error.message)), 15000);
   } catch (error) {
     showMessage(error.message);
   }

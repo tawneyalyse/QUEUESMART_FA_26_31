@@ -20,39 +20,42 @@ function validEmail(email) {
   );
 }
 
-async function findService(id) {
-  const name = serviceAliases[id];
+async function findService(id, client = db, lock = false) {
+  if (!(typeof id === "string" || Number.isInteger(id))) return null;
+  const name = Object.hasOwn(serviceAliases, id) ? serviceAliases[id] : null;
 
   if (name) {
-    const [rows] = await db.execute(
-      "SELECT * FROM Service WHERE service_name = ?",
+    const [rows] = await client.execute(
+      "SELECT * FROM Service WHERE service_name = ?" + (lock ? " FOR UPDATE" : ""),
       [name]
     );
     return rows[0] || null;
   }
 
-  const [rows] = await db.execute(
-    "SELECT * FROM Service WHERE service_id = ?",
+  if (!/^[1-9]\d*$/.test(String(id))) return null;
+  const [rows] = await client.execute(
+    "SELECT * FROM Service WHERE service_id = ?" + (lock ? " FOR UPDATE" : ""),
     [id]
   );
 
   return rows[0] || null;
 }
 
-async function getQueue(serviceId) {
-  const [rows] = await db.execute(
-    "SELECT * FROM Queue WHERE service_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1",
+async function getQueue(serviceId, client = db, create = false) {
+  const [rows] = await client.execute(
+    "SELECT * FROM Queue WHERE service_id = ? AND status = 'open' ORDER BY created_at DESC, queue_id DESC LIMIT 1",
     [serviceId]
   );
 
   if (rows.length) return rows[0];
+  if (!create) return { queue_id: null, service_id: serviceId };
 
-  const [result] = await db.execute(
+  const [result] = await client.execute(
     "INSERT INTO Queue (service_id, status) VALUES (?, 'open')",
     [serviceId]
   );
 
-  const [created] = await db.execute(
+  const [created] = await client.execute(
     "SELECT * FROM Queue WHERE queue_id = ?",
     [result.insertId]
   );
@@ -60,22 +63,23 @@ async function getQueue(serviceId) {
   return created[0];
 }
 
-async function getWaiting(queueId) {
-  const [rows] = await db.execute(
+async function getWaiting(queueId, client = db) {
+  if (queueId === null) return [];
+  const [rows] = await client.execute(
     `SELECT qe.entry_id, qe.user_id, qe.position,
             qe.join_time, uc.email
      FROM QueueEntry qe
      JOIN UserCredentials uc ON qe.user_id = uc.user_id
      WHERE qe.queue_id = ? AND qe.status = 'waiting'
-     ORDER BY qe.position ASC`,
+     ORDER BY qe.position ASC, qe.entry_id ASC`,
     [queueId]
   );
 
   return rows;
 }
 
-async function queueDetails(service, queue) {
-  const waiting = await getWaiting(queue.queue_id);
+async function queueDetails(service, queue, client = db) {
+  const waiting = await getWaiting(queue.queue_id, client);
 
   return waiting.map((entry, index) => ({
     id: entry.entry_id,
@@ -90,19 +94,19 @@ async function queueDetails(service, queue) {
   }));
 }
 
-async function updatePositions(queueId) {
-  const waiting = await getWaiting(queueId);
+async function updatePositions(queueId, client = db) {
+  const waiting = await getWaiting(queueId, client);
 
   for (let i = 0; i < waiting.length; i++) {
-    await db.execute(
+    await client.execute(
       "UPDATE QueueEntry SET position = ? WHERE entry_id = ?",
       [i + 1, waiting[i].entry_id]
     );
   }
 }
 
-async function addNotification(userId, type, message) {
-  await db.execute(
+async function addNotification(userId, type, message, client = db) {
+  await client.execute(
     `INSERT INTO Notification
      (user_id, notification_type, message, status)
      VALUES (?, ?, ?, 'sent')`,
@@ -110,21 +114,39 @@ async function addNotification(userId, type, message) {
   );
 }
 
-async function updateAlmostReady(service, queue) {
-  const waiting = await getWaiting(queue.queue_id);
+async function updateAlmostReady(service, queue, client = db, previous = []) {
+  const waiting = await getWaiting(queue.queue_id, client);
 
   for (let i = 0; i < waiting.length; i++) {
     const position = i + 1;
 
-    if (position <= 2) {
+    if (position <= 2 && previous.some(entry => entry.entry_id === waiting[i].entry_id && entry.position > 2)) {
       await addNotification(
         waiting[i].user_id,
         "almost_ready",
-        `${service.service_name}: position ${position}, estimated wait ${estimateWait(position, service.expected_duration)} minutes. You are almost ready.`
+        `${service.service_name}: position ${position}, estimated wait ${estimateWait(position, service.expected_duration)} minutes. You are almost ready.`,
+        client
       );
     }
   }
 }
+
+// Queue authorization uses the session established by auth.js.
+router.use("/queues", (req, res, next) => {
+  const user = req.session && req.session.user;
+  if (!user) return res.status(401).json({ success: false, message: "Please log in." });
+  const adminOnly = /\/next\/?$/.test(req.path) ||
+    (req.method === "GET" && /^\/[^/]+\/?$/.test(req.path) && !/^\/services\/?$/.test(req.path));
+  if (adminOnly && user.role !== "Administrator") {
+    return res.status(403).json({ success: false, message: "Administrator access is required." });
+  }
+  const emails = [req.body?.userEmail, req.query.userEmail,
+    req.path.startsWith("/user/") ? decodeURIComponent(req.path.slice(6).replace(/\/$/, "")) : undefined];
+  if (emails.some(email => validEmail(email) && email.trim().toLowerCase() !== user.email?.trim().toLowerCase())) {
+    return res.status(403).json({ success: false, message: "Use your own account email." });
+  }
+  next();
+});
 
 router.get("/queues/services", async (req, res) => {
   try {
@@ -169,7 +191,7 @@ router.get("/queues/user/:userEmail", async (req, res) => {
     }
 
     const [rows] = await db.execute(
-      `SELECT qe.*, s.service_name, s.expected_duration
+      `SELECT qe.*, q.service_id, s.service_name, s.expected_duration
        FROM QueueEntry qe
        JOIN Queue q ON qe.queue_id = q.queue_id
        JOIN Service s ON q.service_id = s.service_id
@@ -197,6 +219,7 @@ router.get("/queues/user/:userEmail", async (req, res) => {
       },
       entry: {
         id: entry.entry_id,
+        serviceId: entry.service_id,
         userEmail: req.params.userEmail,
         position: entry.position,
         joinedAt: entry.join_time,
@@ -215,7 +238,11 @@ router.get("/queues/user/:userEmail", async (req, res) => {
 });
 
 router.post("/queues/join", async (req, res) => {
+  let client;
+  let committed = false;
   try {
+    client = await db.getConnection();
+    await client.beginTransaction();
     const { userEmail, serviceId } = req.body || {};
 
     if (!validEmail(userEmail) || !serviceId) {
@@ -225,7 +252,7 @@ router.post("/queues/join", async (req, res) => {
       });
     }
 
-    const service = await findService(serviceId);
+    const service = await findService(serviceId, client, true);
 
     if (!service) {
       return res.status(404).json({
@@ -236,8 +263,8 @@ router.post("/queues/join", async (req, res) => {
 
     const email = userEmail.toLowerCase().trim();
 
-    const [users] = await db.execute(
-      "SELECT user_id FROM UserCredentials WHERE email = ?",
+    const [users] = await client.execute(
+      "SELECT user_id FROM UserCredentials WHERE email = ? FOR UPDATE",
       [email]
     );
 
@@ -249,11 +276,11 @@ router.post("/queues/join", async (req, res) => {
     }
 
     const userId = users[0].user_id;
-    const queue = await getQueue(service.service_id);
+    const queue = await getQueue(service.service_id, client, true);
 
-    const [existing] = await db.execute(
+    const [existing] = await client.execute(
       `SELECT entry_id FROM QueueEntry
-       WHERE user_id = ? AND status = 'waiting'`,
+       WHERE user_id = ? AND status = 'waiting' FOR UPDATE`,
       [userId]
     );
 
@@ -264,17 +291,17 @@ router.post("/queues/join", async (req, res) => {
       });
     }
 
-    const waiting = await getWaiting(queue.queue_id);
+    const waiting = await getWaiting(queue.queue_id, client);
     const position = waiting.length + 1;
 
-    const [result] = await db.execute(
+    const [result] = await client.execute(
       `INSERT INTO QueueEntry
        (queue_id, user_id, position, status)
        VALUES (?, ?, ?, 'waiting')`,
       [queue.queue_id, userId, position]
     );
 
-    await db.execute(
+    await client.execute(
       `INSERT INTO History
        (user_id, service_id, outcome)
        VALUES (?, ?, 'active')`,
@@ -284,14 +311,17 @@ router.post("/queues/join", async (req, res) => {
     await addNotification(
       userId,
       "queue_joined",
-      `You joined ${service.service_name}. Position: ${position}. Estimated wait: ${estimateWait(position, service.expected_duration)} minutes.`
+      `You joined ${service.service_name}. Position: ${position}. Estimated wait: ${estimateWait(position, service.expected_duration)} minutes.`,
+      client
     );
 
-    const [entries] = await db.execute(
+    const [entries] = await client.execute(
       "SELECT join_time FROM QueueEntry WHERE entry_id = ?",
       [result.insertId]
     );
 
+    await client.commit();
+    committed = true;
     return res.status(201).json({
       success: true,
       message: "Joined queue.",
@@ -308,16 +338,27 @@ router.post("/queues/join", async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(error.code === "ER_DUP_ENTRY" ? 409 : 500).json({
       success: false,
-      message: "Could not join queue."
+      message: error.code === "ER_DUP_ENTRY" ? "Queue membership conflicts with an existing entry." : "Could not join queue."
     });
+  }
+  finally {
+    if (client) {
+      try { if (!committed) await client.rollback(); }
+      catch (error) { console.error("Queue rollback failed:", error.code || "unknown"); }
+      finally { client.release(); }
+    }
   }
 });
 
 router.delete("/queues/:serviceId/leave", async (req, res) => {
+  let client;
+  let committed = false;
   try {
-    const service = await findService(req.params.serviceId);
+    client = await db.getConnection();
+    await client.beginTransaction();
+    const service = await findService(req.params.serviceId, client, true);
 
     if (!service) {
       return res.status(404).json({
@@ -336,9 +377,9 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
     }
 
     const email = userEmail.toLowerCase().trim();
-    const queue = await getQueue(service.service_id);
+    const queue = await getQueue(service.service_id, client);
 
-    const [entries] = await db.execute(
+    const [entries] = await client.execute(
       `SELECT qe.entry_id, qe.user_id
        FROM QueueEntry qe
        JOIN UserCredentials uc ON qe.user_id = uc.user_id
@@ -355,32 +396,43 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
     }
 
     const entry = entries[0];
+    const previous = await getWaiting(queue.queue_id, client);
 
-    await db.execute(
+    await client.execute(
       "UPDATE QueueEntry SET status = 'canceled' WHERE entry_id = ?",
       [entry.entry_id]
     );
 
-    await db.execute(
+    await client.execute(
       `UPDATE History SET outcome = 'left', completed_at = CURRENT_TIMESTAMP
        WHERE user_id = ? AND service_id = ? AND outcome = 'active'
        ORDER BY history_id DESC LIMIT 1`,
       [entry.user_id, service.service_id]
     );
 
-    await updatePositions(queue.queue_id);
-    await updateAlmostReady(service, queue);
+    await updatePositions(queue.queue_id, client);
+    await updateAlmostReady(service, queue, client, previous);
 
+    const updatedQueue = await queueDetails(service, queue, client);
+    await client.commit();
+    committed = true;
     return res.json({
       success: true,
       message: "Left queue.",
-      queue: await queueDetails(service, queue)
+      queue: updatedQueue
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: "Could not leave queue."
     });
+  }
+  finally {
+    if (client) {
+      try { if (!committed) await client.rollback(); }
+      catch (error) { console.error("Queue rollback failed:", error.code || "unknown"); }
+      finally { client.release(); }
+    }
   }
 });
 
@@ -469,8 +521,12 @@ router.get("/queues/:serviceId", async (req, res) => {
 });
 
 router.post("/queues/:serviceId/next", async (req, res) => {
+  let client;
+  let committed = false;
   try {
-    const service = await findService(req.params.serviceId);
+    client = await db.getConnection();
+    await client.beginTransaction();
+    const service = await findService(req.params.serviceId, client, true);
 
     if (!service) {
       return res.status(404).json({
@@ -479,8 +535,8 @@ router.post("/queues/:serviceId/next", async (req, res) => {
       });
     }
 
-    const queue = await getQueue(service.service_id);
-    const waiting = await getWaiting(queue.queue_id);
+    const queue = await getQueue(service.service_id, client);
+    const waiting = await getWaiting(queue.queue_id, client);
 
     if (!waiting.length) {
       return res.status(404).json({
@@ -491,21 +547,24 @@ router.post("/queues/:serviceId/next", async (req, res) => {
 
     const next = waiting[0];
 
-    await db.execute(
+    await client.execute(
       "UPDATE QueueEntry SET status = 'served' WHERE entry_id = ?",
       [next.entry_id]
     );
 
-    await db.execute(
+    await client.execute(
       `UPDATE History SET outcome = 'served', completed_at = CURRENT_TIMESTAMP
        WHERE user_id = ? AND service_id = ? AND outcome = 'active'
        ORDER BY history_id DESC LIMIT 1`,
       [next.user_id, service.service_id]
     );
 
-    await updatePositions(queue.queue_id);
-    await updateAlmostReady(service, queue);
+    await updatePositions(queue.queue_id, client);
+    await updateAlmostReady(service, queue, client, waiting);
 
+    const updatedQueue = await queueDetails(service, queue, client);
+    await client.commit();
+    committed = true;
     return res.json({
       success: true,
       message: "Next user served.",
@@ -514,13 +573,20 @@ router.post("/queues/:serviceId/next", async (req, res) => {
         userEmail: next.email,
         serviceId: service.service_id
       },
-      queue: await queueDetails(service, queue)
+      queue: updatedQueue
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: "Could not serve next user."
     });
+  }
+  finally {
+    if (client) {
+      try { if (!committed) await client.rollback(); }
+      catch (error) { console.error("Queue rollback failed:", error.code || "unknown"); }
+      finally { client.release(); }
+    }
   }
 });
 
