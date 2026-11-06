@@ -3,18 +3,20 @@ const { db, bcrypt } = require("./database");
 const router = express.Router();
 
 router.post("/register", async (req, res) => {
-  const { email, password } = req.body || {};
+  const { email, password, fullName, contactInfo } = req.body || {};
 
   if (
     typeof email !== "string" ||
     typeof password !== "string" ||
+    typeof fullName !== "string" ||
     !email.trim() ||
     !password ||
+    !fullName.trim() ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
   ) {
     return res.status(400).json({
       success: false,
-      message: "Enter a valid email and password."
+      message: "Enter a valid email, password, and full name."
     });
   }
 
@@ -25,14 +27,36 @@ router.post("/register", async (req, res) => {
     });
   }
 
+  if (
+    contactInfo !== undefined &&
+    contactInfo !== null &&
+    (typeof contactInfo !== "string" || contactInfo.length > 100)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Contact information must be 100 characters or fewer."
+    });
+  }
+
+  const connection = await db.getConnection();
+
   try {
+    await connection.beginTransaction();
+
     const normalizedEmail = email.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    await db.execute(
-      "INSERT INTO UserCredentials (email, password) VALUES (?, ?)",
+    const [result] = await connection.execute(
+      "INSERT INTO UserCredentials (email, password, role) VALUES (?, ?, 'User')",
       [normalizedEmail, hashedPassword]
     );
+
+    await connection.execute(
+      "INSERT INTO UserProfile (user_id, full_name, contact_info) VALUES (?, ?, ?)",
+      [result.insertId, fullName.trim(), contactInfo?.trim() || null]
+    );
+
+    await connection.commit();
 
     return res.status(201).json({
       success: true,
@@ -40,6 +64,8 @@ router.post("/register", async (req, res) => {
       role: "User"
     });
   } catch (error) {
+    await connection.rollback();
+
     if (error.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
         success: false,
@@ -51,6 +77,8 @@ router.post("/register", async (req, res) => {
       success: false,
       message: "Could not create account."
     });
+  } finally {
+    connection.release();
   }
 });
 
