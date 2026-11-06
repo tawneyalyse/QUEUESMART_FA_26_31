@@ -607,6 +607,10 @@ if (getElement("auth-form")) {
             body: JSON.stringify({
               email,
               password,
+              ...(isRegister && {
+                fullName: getElement("fullName").value.trim(),
+                contactInfo: getElement("contactInfo").value.trim(),
+              }),
             }),
             credentials: "include",
           }
