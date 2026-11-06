@@ -8,12 +8,17 @@ const queueSummary = document.getElementById("queue-summary");
 const leaveButton = document.getElementById("leave-button");
 const joinButton = document.getElementById("join-button");
 const messageText = document.getElementById("feedback");
+
 let currentEntry = null;
 
 async function queueRequest(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.message || "Could not load queue information.");
+
+  if (!response.ok) {
+    throw new Error(data.message || "Could not load queue information.");
+  }
+
   return data;
 }
 
@@ -22,13 +27,17 @@ function showMessage(message) {
 }
 
 function showQueue(entry, service) {
-  currentEntry = entry;
+  currentEntry = entry && service
+    ? { ...entry, serviceId: entry.serviceId || service.id }
+    : null;
+
   queueSummary.replaceChildren();
-  const lines = entry
+
+  const lines = currentEntry
     ? [
         `Service: ${service.name}`,
-        `Position: ${entry.position}`,
-        `Estimated wait: ${entry.estimatedWait} minutes`,
+        `Position: ${currentEntry.position}`,
+        `Estimated wait: ${currentEntry.estimatedWait} minutes`,
       ]
     : ["You are not currently in a queue."];
 
@@ -38,28 +47,38 @@ function showQueue(entry, service) {
     queueSummary.append(paragraph);
   });
 
-  joinButton.disabled = !!entry;
-  leaveButton.disabled = !entry;
+  joinButton.disabled = !!currentEntry;
+  leaveButton.disabled = !currentEntry;
 }
 
 async function loadServices() {
   const data = await queueRequest("/api/queues/services");
-  serviceInput.replaceChildren(new Option("Select a service", ""));
+
+  serviceInput.replaceChildren(
+    new Option("Select a service", "")
+  );
+
   data.services.forEach((service) => {
     serviceInput.add(new Option(service.name, service.id));
   });
+
   return data.services;
 }
 
 async function refreshWait() {
   if (!serviceInput.value) {
-    estimateText.textContent = "Select a service to see the estimated wait.";
+    estimateText.textContent =
+      "Select a service to see the estimated wait.";
     return;
   }
 
   try {
-    const data = await queueRequest(`/api/queues/${serviceInput.value}/wait-time`);
-    estimateText.textContent = `Estimated wait to join: ${data.estimatedWait} minutes`;
+    const data = await queueRequest(
+      `/api/queues/${serviceInput.value}/wait-time`
+    );
+
+    estimateText.textContent =
+      `Estimated wait to join: ${data.estimatedWait} minutes`;
   } catch (error) {
     showMessage(error.message);
   }
@@ -67,40 +86,63 @@ async function refreshWait() {
 
 async function loadCurrentQueue() {
   const email = emailInput.value.trim().toLowerCase();
+
   if (!emailInput.checkValidity() || !email) {
-    showQueue(null);
+    showQueue(null, null);
     return;
   }
 
-  const response = await fetch(`/api/queues/user/${encodeURIComponent(email)}`);
+  const response = await fetch(
+    `/api/queues/user/${encodeURIComponent(email)}`
+  );
+
   if (response.status === 404) {
-    showQueue(null);
+    showQueue(null, null);
     return;
   }
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.message || "Could not load your queue.");
+
+  if (!response.ok) {
+    throw new Error(data.message || "Could not load your queue.");
+  }
+
   showQueue(data.entry, data.service);
   serviceInput.value = data.service.id;
 }
 
 queueForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+
   if (!queueForm.reportValidity()) return;
 
   try {
     const email = emailInput.value.trim().toLowerCase();
+
     const data = await queueRequest("/api/queues/join", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userEmail: email, serviceId: serviceInput.value }),
+      body: JSON.stringify({
+        userEmail: email,
+        serviceId: serviceInput.value,
+      }),
     });
 
     sessionStorage.setItem("queuesmart-email", email);
+
     const services = await loadServices();
-    const service = services.find((item) => item.id === data.entry.serviceId);
+
+    const service = services.find(
+      (item) => String(item.id) === String(data.entry.serviceId)
+    );
+
+    if (!service) {
+      throw new Error("Service information could not be found.");
+    }
+
     showQueue(data.entry, service);
     serviceInput.value = data.entry.serviceId;
+
     await refreshWait();
     showMessage("You've joined the queue.");
   } catch (error) {
@@ -110,17 +152,24 @@ queueForm.addEventListener("submit", async (event) => {
 });
 
 leaveButton.addEventListener("click", async () => {
-  if (!currentEntry) return;
+  if (!currentEntry || !currentEntry.serviceId) return;
 
   try {
-    await queueRequest(`/api/queues/${currentEntry.serviceId}/leave`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userEmail: emailInput.value.trim() }),
-    });
-    showQueue(null);
+    await queueRequest(
+      `/api/queues/${currentEntry.serviceId}/leave`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userEmail: emailInput.value.trim().toLowerCase(),
+        }),
+      }
+    );
+
+    showQueue(null, null);
     await loadServices();
     await refreshWait();
+
     showMessage("You left the queue.");
   } catch (error) {
     showMessage(error.message);
@@ -128,6 +177,7 @@ leaveButton.addEventListener("click", async () => {
 });
 
 serviceInput.addEventListener("change", refreshWait);
+
 emailInput.addEventListener("change", async () => {
   try {
     await loadCurrentQueue();
@@ -137,7 +187,9 @@ emailInput.addEventListener("change", async () => {
 });
 
 (async () => {
-  emailInput.value = sessionStorage.getItem("queuesmart-email") || "";
+  emailInput.value =
+    sessionStorage.getItem("queuesmart-email") || "";
+
   try {
     await loadServices();
     await loadCurrentQueue();
