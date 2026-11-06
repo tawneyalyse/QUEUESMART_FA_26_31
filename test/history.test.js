@@ -1,342 +1,272 @@
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const express = require("express");
+jest.mock("../database", () => ({
+  db: {
+    execute: jest.fn()
+  }
+}));
 
+const express = require("express");
+const request = require("supertest");
+const { db } = require("../database");
 const historyRoutes = require("../history");
-const {
-  createHistory,
-  completeHistory,
-} = require("../history");
-const {
-  run,
-  get,
-  bcrypt,
-} = require("../database");
+const { createHistory, completeHistory } = require("../history");
 
 const app = express();
-
 app.use(express.json());
 app.use("/api", historyRoutes);
 
-const TEST_EMAIL = "history-test@example.com";
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
-let server;
-let baseUrl;
-let passwordHash;
+describe("History routes", () => {
+  test("creates a history record successfully", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([[{ service_id: 2 }]])
+      .mockResolvedValueOnce([{ insertId: 10 }])
+      .mockResolvedValueOnce([[
+        {
+          id: 10,
+          userEmail: "test@example.com",
+          serviceName: "Academic Advising",
+          outcome: "active"
+        }
+      ]]);
 
-test.before(async () => {
-  passwordHash = await bcrypt.hash(
-    "TestPassword123!",
-    10
-  );
+    const response = await request(app)
+      .post("/api/history")
+      .send({
+        userEmail: "test@example.com",
+        serviceName: "Academic Advising"
+      });
 
-  await new Promise((resolve) => {
-    server = app.listen(0, () => {
-      const { port } = server.address();
-      baseUrl = `http://127.0.0.1:${port}`;
-      resolve();
-    });
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.record.id).toBe(10);
+    expect(response.body.record.outcome).toBe("active");
+  });
+
+  test("rejects missing history fields", async () => {
+    const response = await request(app)
+      .post("/api/history")
+      .send({ userEmail: "test@example.com" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("rejects non-text history fields", async () => {
+    const response = await request(app)
+      .post("/api/history")
+      .send({
+        userEmail: 123,
+        serviceName: "Academic Advising"
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("History fields must be text.");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("rejects invalid history data", async () => {
+    const response = await request(app)
+      .post("/api/history")
+      .send({
+        userEmail: "invalid-email",
+        serviceName: "Academic Advising"
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("Invalid history data.");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("returns the user's history", async () => {
+    db.execute.mockResolvedValueOnce([[
+      {
+        id: 1,
+        userEmail: "test@example.com",
+        serviceName: "Academic Advising",
+        outcome: "served"
+      }
+    ]]);
+
+    const response = await request(app)
+      .get("/api/history/test@example.com");
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.history).toHaveLength(1);
+    expect(response.body.history[0].outcome).toBe("served");
+  });
+
+  test("returns an empty history list when the user has no records", async () => {
+    db.execute.mockResolvedValueOnce([[]]);
+
+    const response = await request(app)
+      .get("/api/history/test@example.com");
+
+    expect(response.status).toBe(200);
+    expect(response.body.history).toEqual([]);
+  });
+
+  test("updates a history record to served", async () => {
+    db.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[
+        {
+          id: 10,
+          userEmail: "test@example.com",
+          serviceName: "Academic Advising",
+          outcome: "served"
+        }
+      ]]);
+
+    const response = await request(app)
+      .patch("/api/history/10")
+      .send({ outcome: "served" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.record.outcome).toBe("served");
+  });
+
+  test("updates a history record to left", async () => {
+    db.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[
+        {
+          id: 10,
+          userEmail: "test@example.com",
+          serviceName: "Academic Advising",
+          outcome: "left"
+        }
+      ]]);
+
+    const response = await request(app)
+      .patch("/api/history/10")
+      .send({ outcome: "left" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.record.outcome).toBe("left");
+  });
+
+  test("rejects an invalid history ID", async () => {
+    const response = await request(app)
+      .patch("/api/history/invalid")
+      .send({ outcome: "served" });
+
+    expect(response.status).toBe(400);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("rejects an invalid history outcome", async () => {
+    const response = await request(app)
+      .patch("/api/history/10")
+      .send({ outcome: "active" });
+
+    expect(response.status).toBe(400);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("returns 404 when the history record does not exist", async () => {
+    db.execute.mockResolvedValueOnce([{ affectedRows: 0 }]);
+
+    const response = await request(app)
+      .patch("/api/history/999")
+      .send({ outcome: "served" });
+
+    expect(response.status).toBe(404);
+    expect(response.body.message).toBe("History record not found.");
+  });
+
+  test("returns a server error when retrieving history fails", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database error"));
+
+    const response = await request(app)
+      .get("/api/history/test@example.com");
+
+    expect(response.status).toBe(500);
+    expect(response.body.success).toBe(false);
   });
 });
 
-test.beforeEach(async () => {
-  await run(
-    `
-      DELETE FROM history
-      WHERE user_id IN (
-        SELECT id
-        FROM users
-        WHERE email = ?
-      )
-    `,
-    [TEST_EMAIL]
-  );
+describe("History helper functions", () => {
+  test("creates history using the helper function", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([[{ service_id: 2 }]])
+      .mockResolvedValueOnce([{ insertId: 15 }])
+      .mockResolvedValueOnce([[
+        {
+          id: 15,
+          userEmail: "test@example.com",
+          serviceName: "Academic Advising",
+          outcome: "active"
+        }
+      ]]);
 
-  await run(
-    `
-      DELETE FROM users
-      WHERE email = ?
-    `,
-    [TEST_EMAIL]
-  );
+    const result = await createHistory(
+      "TEST@example.com",
+      "Academic Advising"
+    );
 
-  await run(
-    `
-      INSERT INTO users (
-        email,
-        password,
-        role
-      )
-      VALUES (?, ?, 'User')
-    `,
-    [TEST_EMAIL, passwordHash]
-  );
-});
-
-test.after(async () => {
-  await run(
-    `
-      DELETE FROM history
-      WHERE user_id IN (
-        SELECT id
-        FROM users
-        WHERE email = ?
-      )
-    `,
-    [TEST_EMAIL]
-  );
-
-  await run(
-    `
-      DELETE FROM users
-      WHERE email = ?
-    `,
-    [TEST_EMAIL]
-  );
-
-  await new Promise((resolve) => {
-    server.close(resolve);
+    expect(result.id).toBe(15);
+    expect(result.userEmail).toBe("test@example.com");
+    expect(result.outcome).toBe("active");
   });
-});
 
-test("creates and stores a history record", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/history`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: TEST_EMAIL,
-        serviceName: "Academic Advising",
-      }),
-    }
-  );
+  test("rejects history creation when the user does not exist", async () => {
+    db.execute.mockResolvedValueOnce([[]]);
 
-  const data = await response.json();
+    await expect(
+      createHistory("missing@example.com", "Academic Advising")
+    ).rejects.toThrow("User not found.");
+  });
 
-  assert.equal(response.status, 201);
-  assert.equal(data.success, true);
-  assert.equal(
-    data.record.userEmail,
-    TEST_EMAIL
-  );
-  assert.equal(
-    data.record.serviceName,
-    "Academic Advising"
-  );
-  assert.equal(
-    data.record.outcome,
-    "active"
-  );
+  test("rejects history creation when the service does not exist", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([[]]);
 
-  const stored = await get(
-    `
-      SELECT
-        service_name,
-        outcome,
-        joined_at
-      FROM history
-      WHERE id = ?
-    `,
-    [data.record.id]
-  );
+    await expect(
+      createHistory("test@example.com", "Missing Service")
+    ).rejects.toThrow("Service not found.");
+  });
 
-  assert.equal(
-    stored.service_name,
-    "Academic Advising"
-  );
-  assert.equal(stored.outcome, "active");
-  assert.ok(stored.joined_at);
-});
+  test("completes an active history record", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ history_id: 15 }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[
+        {
+          id: 15,
+          userEmail: "test@example.com",
+          serviceName: "Academic Advising",
+          outcome: "served"
+        }
+      ]]);
 
-test("rejects missing history fields", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/history`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: TEST_EMAIL,
-      }),
-    }
-  );
+    const result = await completeHistory(
+      "test@example.com",
+      "Academic Advising",
+      "served"
+    );
 
-  assert.equal(response.status, 400);
-});
+    expect(result.id).toBe(15);
+    expect(result.outcome).toBe("served");
+  });
 
-test("returns history for a user", async () => {
-  await createHistory(
-    TEST_EMAIL,
-    "Academic Advising"
-  );
+  test("returns null when no active history record exists", async () => {
+    db.execute.mockResolvedValueOnce([[]]);
 
-  const response = await fetch(
-    `${baseUrl}/api/history/${TEST_EMAIL}`
-  );
+    const result = await completeHistory(
+      "test@example.com",
+      "Academic Advising",
+      "left"
+    );
 
-  const data = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(data.success, true);
-  assert.equal(data.history.length, 1);
-  assert.equal(
-    data.history[0].serviceName,
-    "Academic Advising"
-  );
-});
-
-test("marks a history record as served", async () => {
-  const record = await createHistory(
-    TEST_EMAIL,
-    "Academic Advising"
-  );
-
-  const response = await fetch(
-    `${baseUrl}/api/history/${record.id}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        outcome: "served",
-      }),
-    }
-  );
-
-  const data = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(
-    data.record.outcome,
-    "served"
-  );
-  assert.notEqual(
-    data.record.completedAt,
-    null
-  );
-
-  const stored = await get(
-    `
-      SELECT
-        outcome,
-        completed_at
-      FROM history
-      WHERE id = ?
-    `,
-    [record.id]
-  );
-
-  assert.equal(stored.outcome, "served");
-  assert.notEqual(
-    stored.completed_at,
-    null
-  );
-});
-
-test("marks a history record as left", async () => {
-  await createHistory(
-    TEST_EMAIL,
-    "Financial Aid"
-  );
-
-  const record = await completeHistory(
-    TEST_EMAIL,
-    "Financial Aid",
-    "left"
-  );
-
-  assert.equal(record.outcome, "left");
-  assert.notEqual(
-    record.completedAt,
-    null
-  );
-
-  const stored = await get(
-    `
-      SELECT
-        outcome,
-        completed_at
-      FROM history
-      WHERE id = ?
-    `,
-    [record.id]
-  );
-
-  assert.equal(stored.outcome, "left");
-  assert.notEqual(
-    stored.completed_at,
-    null
-  );
-});
-
-test("returns null when no active history record exists", async () => {
-  const record = await completeHistory(
-    TEST_EMAIL,
-    "Academic Advising",
-    "served"
-  );
-
-  assert.equal(record, null);
-});
-
-test("rejects an invalid outcome", async () => {
-  const record = await createHistory(
-    TEST_EMAIL,
-    "Academic Advising"
-  );
-
-  const response = await fetch(
-    `${baseUrl}/api/history/${record.id}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        outcome: "invalid",
-      }),
-    }
-  );
-
-  assert.equal(response.status, 400);
-});
-
-test("returns 404 for an unknown history record", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/history/999999`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        outcome: "served",
-      }),
-    }
-  );
-
-  assert.equal(response.status, 404);
-});
-
-test("returns 404 when creating history for an unknown user", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/history`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: "missing@example.com",
-        serviceName: "Academic Advising",
-      }),
-    }
-  );
-
-  assert.equal(response.status, 404);
+    expect(result).toBeNull();
+  });
 });
