@@ -1,0 +1,95 @@
+CREATE DATABASE queuesmart;
+USE queuesmart;
+
+CREATE TABLE UserCredentials (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(254) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    role ENUM('User', 'Administrator') DEFAULT 'User'
+);
+
+CREATE TABLE UserProfile (
+    profile_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNIQUE,
+    full_name VARCHAR(150),
+    contact_info VARCHAR(100),
+    FOREIGN KEY (user_id)
+        REFERENCES UserCredentials(user_id)
+);
+
+CREATE TABLE Service (
+    service_id INT AUTO_INCREMENT PRIMARY KEY,
+    service_name VARCHAR(100) NOT NULL UNIQUE,
+    description VARCHAR(500),
+    expected_duration INT NOT NULL,
+    priority ENUM('low', 'medium', 'high') NOT NULL
+);
+
+CREATE TABLE Queue (
+    queue_id INT AUTO_INCREMENT PRIMARY KEY,
+    service_id INT,
+    status ENUM('open', 'closed') DEFAULT 'open',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (service_id)
+        REFERENCES Service(service_id)
+);
+
+CREATE TABLE QueueEntry (
+    entry_id INT AUTO_INCREMENT PRIMARY KEY,
+    queue_id INT,
+    user_id INT,
+    position INT NOT NULL,
+    join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('waiting', 'served', 'canceled') DEFAULT 'waiting',
+    FOREIGN KEY (queue_id)
+        REFERENCES Queue(queue_id),
+    FOREIGN KEY (user_id)
+        REFERENCES UserCredentials(user_id)
+);
+
+CREATE TABLE Notification (
+    notification_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    message VARCHAR(250) NOT NULL,
+    notification_type VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('sent', 'viewed') DEFAULT 'sent',
+    FOREIGN KEY (user_id)
+        REFERENCES UserCredentials(user_id)
+);
+
+CREATE TABLE History (
+    history_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    service_id INT,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP NULL,
+    outcome ENUM('active', 'served', 'left') DEFAULT 'active',
+    FOREIGN KEY (user_id)
+        REFERENCES UserCredentials(user_id),
+    FOREIGN KEY (service_id)
+        REFERENCES Service(service_id)
+);
+
+INSERT INTO Service
+    (service_name, description, expected_duration, priority)
+VALUES
+    ('Academic Advising',
+     'Meet with an academic advisor for course planning and academic guidance.',
+     20, 'medium'),
+
+    ('Financial Aid',
+     'Get assistance with financial aid, scholarships, and student funding.',
+     30, 'high'),
+
+    ('Registration',
+     'Receive help with course registration and enrollment.',
+     15, 'high'),
+
+    ('Transcript Request',
+     'Request official or unofficial academic transcripts.',
+     10, 'low'),
+
+    ('Student ID Services',
+     'Get assistance with student identification cards.',
+     10, 'low');
