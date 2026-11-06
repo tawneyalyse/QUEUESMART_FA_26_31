@@ -1,333 +1,236 @@
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const express = require("express");
+jest.mock("../database", () => ({
+  db: {
+    execute: jest.fn()
+  }
+}));
 
+const express = require("express");
+const request = require("supertest");
+const { db } = require("../database");
 const notificationRoutes = require("../notifications");
-const {
-  notifyQueueJoined,
-  notifyAlmostReady,
-} = require("../notifications");
-const {
-  run,
-  get,
-  bcrypt,
-} = require("../database");
 
 const app = express();
-
 app.use(express.json());
 app.use("/api", notificationRoutes);
 
-const TEST_EMAIL = "notification-test@example.com";
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
-let server;
-let baseUrl;
-let passwordHash;
+describe("Notification routes", () => {
+  test("creates a notification successfully", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([{ insertId: 10 }]);
 
-test.before(async () => {
-  passwordHash = await bcrypt.hash(
-    "TestPassword123!",
-    10
-  );
+    const response = await request(app)
+      .post("/api/notifications")
+      .send({
+        userEmail: "test@example.com",
+        type: "queue_joined",
+        message: "You joined Academic Advising."
+      });
 
-  await new Promise((resolve) => {
-    server = app.listen(0, () => {
-      const { port } = server.address();
-      baseUrl = `http://127.0.0.1:${port}`;
-      resolve();
-    });
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.notification.userEmail).toBe("test@example.com");
+    expect(response.body.notification.type).toBe("queue_joined");
+    expect(response.body.notification.read).toBe(false);
+    expect(db.execute).toHaveBeenCalledTimes(2);
   });
-});
 
-test.beforeEach(async () => {
-  await run(
-    `
-      DELETE FROM notifications
-      WHERE user_id IN (
-        SELECT id
-        FROM users
-        WHERE email = ?
-      )
-    `,
-    [TEST_EMAIL]
-  );
+  test("rejects missing notification fields", async () => {
+    const response = await request(app)
+      .post("/api/notifications")
+      .send({
+        userEmail: "test@example.com",
+        type: "queue_joined"
+      });
 
-  await run(
-    `
-      DELETE FROM users
-      WHERE email = ?
-    `,
-    [TEST_EMAIL]
-  );
-
-  await run(
-    `
-      INSERT INTO users (
-        email,
-        password,
-        role
-      )
-      VALUES (?, ?, 'User')
-    `,
-    [TEST_EMAIL, passwordHash]
-  );
-});
-
-test.after(async () => {
-  await run(
-    `
-      DELETE FROM notifications
-      WHERE user_id IN (
-        SELECT id
-        FROM users
-        WHERE email = ?
-      )
-    `,
-    [TEST_EMAIL]
-  );
-
-  await run(
-    `
-      DELETE FROM users
-      WHERE email = ?
-    `,
-    [TEST_EMAIL]
-  );
-
-  await new Promise((resolve) => {
-    server.close(resolve);
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(db.execute).not.toHaveBeenCalled();
   });
-});
 
-test("creates and stores a notification", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/notifications`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: TEST_EMAIL,
+  test("rejects an invalid email", async () => {
+    const response = await request(app)
+      .post("/api/notifications")
+      .send({
+        userEmail: "invalid-email",
+        type: "queue_joined",
+        message: "Test notification."
+      });
+
+    expect(response.status).toBe(400);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("rejects notification fields that exceed their limits", async () => {
+    const response = await request(app)
+      .post("/api/notifications")
+      .send({
+        userEmail: "test@example.com",
+        type: "a".repeat(51),
+        message: "Test notification."
+      });
+
+    expect(response.status).toBe(400);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("returns 404 when creating a notification for an unknown user", async () => {
+    db.execute.mockResolvedValueOnce([[]]);
+
+    const response = await request(app)
+      .post("/api/notifications")
+      .send({
+        userEmail: "missing@example.com",
+        type: "queue_joined",
+        message: "Test notification."
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body.message).toBe("User not found.");
+  });
+
+  test("retrieves notifications for a user", async () => {
+    const notifications = [
+      {
+        id: 1,
+        userEmail: "test@example.com",
         type: "queue_joined",
         message: "You joined Academic Advising.",
-      }),
-    }
-  );
+        read: 0,
+        createdAt: "2026-11-06 12:00:00"
+      }
+    ];
 
-  const data = await response.json();
+    db.execute.mockResolvedValueOnce([notifications]);
 
-  assert.equal(response.status, 201);
-  assert.equal(data.success, true);
-  assert.equal(
-    data.notification.userEmail,
-    TEST_EMAIL
-  );
-  assert.equal(
-    data.notification.type,
-    "queue_joined"
-  );
-  assert.equal(
-    data.notification.read,
-    false
-  );
+    const response = await request(app)
+      .get("/api/notifications/test@example.com");
 
-  const stored = await get(
-    `
-      SELECT
-        type,
-        message,
-        is_read
-      FROM notifications
-      WHERE id = ?
-    `,
-    [data.notification.id]
-  );
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.notifications).toHaveLength(1);
+    expect(response.body.notifications[0].type).toBe("queue_joined");
+  });
 
-  assert.equal(stored.type, "queue_joined");
-  assert.equal(
-    stored.message,
-    "You joined Academic Advising."
-  );
-  assert.equal(stored.is_read, 0);
+  test("marks a notification as read", async () => {
+    db.execute.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const response = await request(app)
+      .patch("/api/notifications/1/read");
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.message).toBe("Notification marked as read.");
+  });
+
+  test("rejects an invalid notification ID", async () => {
+    const response = await request(app)
+      .patch("/api/notifications/invalid/read");
+
+    expect(response.status).toBe(400);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  test("returns 404 when the notification does not exist", async () => {
+    db.execute.mockResolvedValueOnce([{ affectedRows: 0 }]);
+
+    const response = await request(app)
+      .patch("/api/notifications/999/read");
+
+    expect(response.status).toBe(404);
+    expect(response.body.message).toBe("Notification not found.");
+  });
+
+  test("marks all notifications for a user as read", async () => {
+    db.execute.mockResolvedValueOnce([{ affectedRows: 3 }]);
+
+    const response = await request(app)
+      .patch("/api/notifications/user/test@example.com/read-all");
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+  });
+
+  test("returns a server error when notification retrieval fails", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database error"));
+
+    const response = await request(app)
+      .get("/api/notifications/test@example.com");
+
+    expect(response.status).toBe(500);
+    expect(response.body.success).toBe(false);
+  });
 });
 
-test("rejects missing notification fields", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/notifications`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: TEST_EMAIL,
-        type: "queue_joined",
-      }),
-    }
-  );
+describe("Notification helper functions", () => {
+  const {
+    createNotification,
+    notifyQueueJoined,
+    notifyAlmostReady
+  } = require("../notifications");
 
-  assert.equal(response.status, 400);
-});
+  test("creates a notification using the helper function", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([{ insertId: 20 }]);
 
-test("returns notifications for a user", async () => {
-  await notifyQueueJoined(
-    TEST_EMAIL,
-    "Academic Advising",
-    4,
-    30
-  );
-
-  const response = await fetch(
-    `${baseUrl}/api/notifications/${TEST_EMAIL}`
-  );
-
-  const data = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(data.success, true);
-  assert.equal(data.notifications.length, 1);
-  assert.equal(
-    data.notifications[0].type,
-    "queue_joined"
-  );
-});
-
-test("marks a notification as read", async () => {
-  const notification =
-    await notifyQueueJoined(
-      TEST_EMAIL,
-      "Academic Advising",
-      4,
-      30
+    const result = await createNotification(
+      "TEST@example.com",
+      "queue_joined",
+      "You joined Academic Advising."
     );
 
-  const response = await fetch(
-    `${baseUrl}/api/notifications/${notification.id}/read`,
-    {
-      method: "PATCH",
-    }
-  );
+    expect(result.id).toBe(20);
+    expect(result.userEmail).toBe("test@example.com");
+    expect(result.read).toBe(false);
+  });
 
-  const data = await response.json();
+  test("rejects helper notification creation for an unknown user", async () => {
+    db.execute.mockResolvedValueOnce([[]]);
 
-  assert.equal(response.status, 200);
-  assert.equal(
-    data.notification.read,
-    true
-  );
+    await expect(
+      createNotification(
+        "missing@example.com",
+        "queue_joined",
+        "Test."
+      )
+    ).rejects.toThrow("User not found.");
+  });
 
-  const stored = await get(
-    `
-      SELECT is_read
-      FROM notifications
-      WHERE id = ?
-    `,
-    [notification.id]
-  );
+  test("creates a queue joined notification", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([{ insertId: 21 }]);
 
-  assert.equal(stored.is_read, 1);
-});
-
-test("creates an almost ready notification", async () => {
-  const notification =
-    await notifyAlmostReady(
-      TEST_EMAIL,
+    const result = await notifyQueueJoined(
+      "test@example.com",
       "Academic Advising",
       2,
       10
     );
 
-  assert.equal(
-    notification.type,
-    "almost_ready"
-  );
-  assert.equal(
-    notification.userEmail,
-    TEST_EMAIL
-  );
-  assert.equal(
-    notification.read,
-    false
-  );
+    expect(result.type).toBe("queue_joined");
+    expect(result.message).toContain("Position: 2");
+    expect(result.message).toContain("10 minutes");
+  });
 
-  const stored = await get(
-    `
-      SELECT type
-      FROM notifications
-      WHERE id = ?
-    `,
-    [notification.id]
-  );
+  test("creates an almost ready notification", async () => {
+    db.execute
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+      .mockResolvedValueOnce([{ insertId: 22 }]);
 
-  assert.equal(stored.type, "almost_ready");
-});
+    const result = await notifyAlmostReady(
+      "test@example.com",
+      "Academic Advising",
+      1,
+      0
+    );
 
-test("marks all user notifications as read", async () => {
-  await notifyQueueJoined(
-    TEST_EMAIL,
-    "Academic Advising",
-    4,
-    30
-  );
-
-  await notifyAlmostReady(
-    TEST_EMAIL,
-    "Academic Advising",
-    2,
-    10
-  );
-
-  const response = await fetch(
-    `${baseUrl}/api/notifications/user/${TEST_EMAIL}/read-all`,
-    {
-      method: "PATCH",
-    }
-  );
-
-  assert.equal(response.status, 200);
-
-  const unread = await get(
-    `
-      SELECT COUNT(*) AS count
-      FROM notifications
-      JOIN users
-        ON users.id = notifications.user_id
-      WHERE users.email = ?
-        AND notifications.is_read = 0
-    `,
-    [TEST_EMAIL]
-  );
-
-  assert.equal(unread.count, 0);
-});
-
-test("returns 404 for an unknown notification", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/notifications/999999/read`,
-    {
-      method: "PATCH",
-    }
-  );
-
-  assert.equal(response.status, 404);
-});
-
-test("returns 404 when creating a notification for an unknown user", async () => {
-  const response = await fetch(
-    `${baseUrl}/api/notifications`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userEmail: "missing@example.com",
-        type: "queue_joined",
-        message: "Test notification.",
-      }),
-    }
-  );
-
-  assert.equal(response.status, 404);
+    expect(result.type).toBe("almost_ready");
+    expect(result.message).toContain("You are almost ready.");
+  });
 });
