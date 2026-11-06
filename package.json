@@ -5,13 +5,16 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "jest --coverage"
+    "test": "npm run test:queue && npm run test:legacy",
+    "test:queue": "jest --config jest.queue.config.cjs --runInBand",
+    "test:legacy": "node --test test/history.test.js test/notifications.test.js",
+    "test:services": "node --test server.test.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
-    "sqlite3": "^5.1.7"
+    "mysql2": "^3.12.0"
   },
   "devDependencies": {
     "jest": "^30.0.0",

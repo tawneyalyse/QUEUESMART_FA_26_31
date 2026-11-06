@@ -221,7 +221,7 @@ function render() {
 
   const currentQueue = state.queue;
 
-  if (getElement("queue-summary")) {
+  if (getElement("queue-summary") && !document.querySelector("[data-live-queue]")) {
     getElement("queue-summary").replaceChildren();
 
     const lines = currentQueue
@@ -321,7 +321,7 @@ function render() {
         : "No past queues yet. Completed or left queues will appear here.";
   }
 
-  if (getElement("join-button")) {
+  if (getElement("join-button") && page !== "join_queue.html") {
     getElement("join-button").disabled =
       !!currentQueue;
   }
@@ -331,7 +331,7 @@ function render() {
     "advance-button",
     "serve-button",
   ]) {
-    if (getElement(id)) {
+    if (getElement(id) && page !== "join_queue.html") {
       getElement(id).disabled =
         !currentQueue ||
         (id === "advance-button" &&
@@ -378,7 +378,7 @@ function completeQueue(outcome) {
   }
 }
 
-if (getElement("services")) {
+if (getElement("services") && !document.querySelector("[data-live-queue]")) {
   services.forEach((s) => {
     getElement("services").append(
       element(
@@ -391,7 +391,7 @@ if (getElement("services")) {
   });
 }
 
-if (getElement("service")) {
+if (getElement("service") && page !== "join_queue.html") {
   services.forEach((s) => {
     const option = element("option", s.name);
     option.value = s.id;
