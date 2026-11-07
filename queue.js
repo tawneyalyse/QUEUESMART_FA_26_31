@@ -20,39 +20,56 @@ function validEmail(email) {
   );
 }
 
-async function findService(id) {
+// Every queue mutation locks its service row until commit. This also protects
+// the first queue creation, where no Queue row exists to lock yet.
+async function findService(id, connection = db, lock = false) {
   const name = serviceAliases[id];
 
   if (name) {
-    const [rows] = await db.execute(
-      "SELECT * FROM Service WHERE service_name = ?",
+    const [rows] = await connection.execute(
+      "SELECT * FROM Service WHERE service_name = ?" + (lock ? " FOR UPDATE" : ""),
       [name]
     );
     return rows[0] || null;
   }
 
-  const [rows] = await db.execute(
-    "SELECT * FROM Service WHERE service_id = ?",
+  const [rows] = await connection.execute(
+    "SELECT * FROM Service WHERE service_id = ?" + (lock ? " FOR UPDATE" : ""),
     [id]
   );
 
   return rows[0] || null;
 }
 
-async function getQueue(serviceId) {
-  const [rows] = await db.execute(
+async function getQueue(serviceId, connection = db) {
+  if (connection === db) {
+    const client = await db.getConnection();
+    try {
+      await client.beginTransaction();
+      await client.execute("SELECT service_id FROM Service WHERE service_id = ? FOR UPDATE", [serviceId]);
+      const queue = await getQueue(serviceId, client);
+      await client.commit();
+      return queue;
+    } catch (error) {
+      await client.rollback();
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  const [rows] = await connection.execute(
     "SELECT * FROM Queue WHERE service_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1",
     [serviceId]
   );
 
   if (rows.length) return rows[0];
 
-  const [result] = await db.execute(
+  const [result] = await connection.execute(
     "INSERT INTO Queue (service_id, status) VALUES (?, 'open')",
     [serviceId]
   );
 
-  const [created] = await db.execute(
+  const [created] = await connection.execute(
     "SELECT * FROM Queue WHERE queue_id = ?",
     [result.insertId]
   );
@@ -60,8 +77,8 @@ async function getQueue(serviceId) {
   return created[0];
 }
 
-async function getWaiting(queueId) {
-  const [rows] = await db.execute(
+async function getWaiting(queueId, connection = db) {
+  const [rows] = await connection.execute(
     `SELECT qe.entry_id, qe.user_id, qe.position,
             qe.join_time, uc.email
      FROM QueueEntry qe
@@ -74,8 +91,8 @@ async function getWaiting(queueId) {
   return rows;
 }
 
-async function queueDetails(service, queue) {
-  const waiting = await getWaiting(queue.queue_id);
+async function queueDetails(service, queue, connection = db) {
+  const waiting = await getWaiting(queue.queue_id, connection);
 
   return waiting.map((entry, index) => ({
     id: entry.entry_id,
@@ -90,19 +107,19 @@ async function queueDetails(service, queue) {
   }));
 }
 
-async function updatePositions(queueId) {
-  const waiting = await getWaiting(queueId);
+async function updatePositions(queueId, connection = db) {
+  const waiting = await getWaiting(queueId, connection);
 
   for (let i = 0; i < waiting.length; i++) {
-    await db.execute(
+    await connection.execute(
       "UPDATE QueueEntry SET position = ? WHERE entry_id = ?",
       [i + 1, waiting[i].entry_id]
     );
   }
 }
 
-async function addNotification(userId, type, message) {
-  const [existing] = await db.execute(
+async function addNotification(userId, type, message, connection = db) {
+  const [existing] = await connection.execute(
     `SELECT notification_id
      FROM Notification
      WHERE user_id = ?
@@ -114,7 +131,7 @@ async function addNotification(userId, type, message) {
 
   if (existing.length) return;
 
-  await db.execute(
+  await connection.execute(
     `INSERT INTO Notification
      (user_id, notification_type, message, status)
      VALUES (?, ?, ?, 'sent')`,
@@ -122,8 +139,8 @@ async function addNotification(userId, type, message) {
   );
 }
 
-async function updateAlmostReady(service, queue) {
-  const waiting = await getWaiting(queue.queue_id);
+async function updateAlmostReady(service, queue, connection = db) {
+  const waiting = await getWaiting(queue.queue_id, connection);
 
   for (let i = 0; i < waiting.length; i++) {
     const position = i + 1;
@@ -132,7 +149,8 @@ async function updateAlmostReady(service, queue) {
       await addNotification(
         waiting[i].user_id,
         "almost_ready",
-        `${service.service_name}: position ${position}, estimated wait ${estimateWait(position, service.expected_duration)} minutes. You are almost ready.`
+        `${service.service_name}: position ${position}, estimated wait ${estimateWait(position, service.expected_duration)} minutes. You are almost ready.`,
+        connection
       );
     }
   }
@@ -230,6 +248,8 @@ router.get("/queues/user/:userEmail", async (req, res) => {
 });
 
 router.post("/queues/join", async (req, res) => {
+  let connection;
+  let transactionFinished = false;
   try {
     const { userEmail, serviceId } = req.body || {};
 
@@ -240,7 +260,9 @@ router.post("/queues/join", async (req, res) => {
       });
     }
 
-    const service = await findService(serviceId);
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const service = await findService(serviceId, connection, true);
 
     if (!service) {
       return res.status(404).json({
@@ -251,8 +273,9 @@ router.post("/queues/join", async (req, res) => {
 
     const email = userEmail.toLowerCase().trim();
 
-    const [users] = await db.execute(
-      "SELECT user_id FROM UserCredentials WHERE email = ?",
+    // Serialize membership checks even when the same user joins different services.
+    const [users] = await connection.execute(
+      "SELECT user_id FROM UserCredentials WHERE email = ? FOR UPDATE",
       [email]
     );
 
@@ -264,9 +287,9 @@ router.post("/queues/join", async (req, res) => {
     }
 
     const userId = users[0].user_id;
-    const queue = await getQueue(service.service_id);
+    const queue = await getQueue(service.service_id, connection);
 
-    const [existing] = await db.execute(
+    const [existing] = await connection.execute(
       `SELECT entry_id FROM QueueEntry
        WHERE user_id = ? AND status = 'waiting'`,
       [userId]
@@ -279,17 +302,17 @@ router.post("/queues/join", async (req, res) => {
       });
     }
 
-    const waiting = await getWaiting(queue.queue_id);
+    const waiting = await getWaiting(queue.queue_id, connection);
     const position = waiting.length + 1;
 
-    const [result] = await db.execute(
+    const [result] = await connection.execute(
       `INSERT INTO QueueEntry
        (queue_id, user_id, position, status)
        VALUES (?, ?, ?, 'waiting')`,
       [queue.queue_id, userId, position]
     );
 
-    await db.execute(
+    await connection.execute(
       `INSERT INTO History
        (user_id, service_id, outcome)
        VALUES (?, ?, 'active')`,
@@ -299,14 +322,17 @@ router.post("/queues/join", async (req, res) => {
     await addNotification(
       userId,
       "queue_joined",
-      `You joined ${service.service_name}. Position: ${position}. Estimated wait: ${estimateWait(position, service.expected_duration)} minutes.`
+      `You joined ${service.service_name}. Position: ${position}. Estimated wait: ${estimateWait(position, service.expected_duration)} minutes.`,
+      connection
     );
 
-    const [entries] = await db.execute(
+    const [entries] = await connection.execute(
       "SELECT join_time FROM QueueEntry WHERE entry_id = ?",
       [result.insertId]
     );
 
+    await connection.commit();
+    transactionFinished = true;
     return res.status(201).json({
       success: true,
       message: "Joined queue.",
@@ -323,17 +349,33 @@ router.post("/queues/join", async (req, res) => {
       }
     });
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+      transactionFinished = true; // Transaction ended with rollback.
+    }
     console.error("Join queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not join queue."
     });
+  } finally {
+    if (connection) {
+      try {
+        if (!transactionFinished) await connection.rollback();
+      } finally {
+        connection.release();
+      }
+    }
   }
 });
 
 router.delete("/queues/:serviceId/leave", async (req, res) => {
+  let connection;
+  let transactionFinished = false;
   try {
-    const service = await findService(req.params.serviceId);
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const service = await findService(req.params.serviceId, connection, true);
 
     if (!service) {
       return res.status(404).json({
@@ -352,9 +394,9 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
     }
 
     const email = userEmail.toLowerCase().trim();
-    const queue = await getQueue(service.service_id);
+    const queue = await getQueue(service.service_id, connection);
 
-    const [entries] = await db.execute(
+    const [entries] = await connection.execute(
       `SELECT qe.entry_id, qe.user_id
        FROM QueueEntry qe
        JOIN UserCredentials uc ON qe.user_id = uc.user_id
@@ -373,12 +415,12 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
 
     const entry = entries[0];
 
-    await db.execute(
+    await connection.execute(
       "UPDATE QueueEntry SET status = 'canceled' WHERE entry_id = ?",
       [entry.entry_id]
     );
 
-    await db.execute(
+    await connection.execute(
       `UPDATE History
        SET outcome = 'left', completed_at = CURRENT_TIMESTAMP
        WHERE user_id = ?
@@ -389,20 +431,35 @@ router.delete("/queues/:serviceId/leave", async (req, res) => {
       [entry.user_id, service.service_id]
     );
 
-    await updatePositions(queue.queue_id);
-    await updateAlmostReady(service, queue);
+    await updatePositions(queue.queue_id, connection);
+    await updateAlmostReady(service, queue, connection);
 
+    const remaining = await queueDetails(service, queue, connection);
+    await connection.commit();
+    transactionFinished = true;
     return res.json({
       success: true,
       message: "Left queue.",
-      queue: await queueDetails(service, queue)
+      queue: remaining
     });
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+      transactionFinished = true; // Transaction ended with rollback.
+    }
     console.error("Leave queue error:", error);
     res.status(500).json({
       success: false,
       message: "Could not leave queue."
     });
+  } finally {
+    if (connection) {
+      try {
+        if (!transactionFinished) await connection.rollback();
+      } finally {
+        connection.release();
+      }
+    }
   }
 });
 
@@ -492,9 +549,23 @@ router.get("/queues/:serviceId", async (req, res) => {
   }
 });
 
-router.post("/queues/:serviceId/next", async (req, res) => {
+function requireQueueAdministrator(req, res, next) {
+  if (!req.session || !req.session.user) {
+    return res.status(401).json({ success: false, message: "Please log in." });
+  }
+  if (req.session.user.role !== "Administrator") {
+    return res.status(403).json({ success: false, message: "Administrator access is required." });
+  }
+  next();
+}
+
+router.post("/queues/:serviceId/next", requireQueueAdministrator, async (req, res) => {
+  let connection;
+  let transactionFinished = false;
   try {
-    const service = await findService(req.params.serviceId);
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const service = await findService(req.params.serviceId, connection, true);
 
     if (!service) {
       return res.status(404).json({
@@ -503,8 +574,8 @@ router.post("/queues/:serviceId/next", async (req, res) => {
       });
     }
 
-    const queue = await getQueue(service.service_id);
-    const waiting = await getWaiting(queue.queue_id);
+    const queue = await getQueue(service.service_id, connection);
+    const waiting = await getWaiting(queue.queue_id, connection);
 
     if (!waiting.length) {
       return res.status(404).json({
@@ -515,12 +586,12 @@ router.post("/queues/:serviceId/next", async (req, res) => {
 
     const next = waiting[0];
 
-    await db.execute(
+    await connection.execute(
       "UPDATE QueueEntry SET status = 'served' WHERE entry_id = ?",
       [next.entry_id]
     );
 
-    await db.execute(
+    await connection.execute(
       `UPDATE History
        SET outcome = 'served', completed_at = CURRENT_TIMESTAMP
        WHERE user_id = ?
@@ -531,9 +602,12 @@ router.post("/queues/:serviceId/next", async (req, res) => {
       [next.user_id, service.service_id]
     );
 
-    await updatePositions(queue.queue_id);
-    await updateAlmostReady(service, queue);
+    await updatePositions(queue.queue_id, connection);
+    await updateAlmostReady(service, queue, connection);
 
+    const remaining = await queueDetails(service, queue, connection);
+    await connection.commit();
+    transactionFinished = true;
     return res.json({
       success: true,
       message: "Next user served.",
@@ -542,14 +616,26 @@ router.post("/queues/:serviceId/next", async (req, res) => {
         userEmail: next.email,
         serviceId: service.service_id
       },
-      queue: await queueDetails(service, queue)
+      queue: remaining
     });
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+      transactionFinished = true; // Transaction ended with rollback.
+    }
     console.error("Serve next user error:", error);
     res.status(500).json({
       success: false,
       message: "Could not serve next user."
     });
+  } finally {
+    if (connection) {
+      try {
+        if (!transactionFinished) await connection.rollback();
+      } finally {
+        connection.release();
+      }
+    }
   }
 });
 
