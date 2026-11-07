@@ -18,14 +18,34 @@ const validService = {
   priority: "medium"
 };
 
+const createdService = {
+  id: 1,
+  serviceName: "Academic Advising",
+  description: "Help with academic planning",
+  duration: 10,
+  priority: "medium"
+};
+
 beforeEach(() => {
-  db.execute.mockReset();
+  jest.clearAllMocks();
   db.execute.mockResolvedValue([[], []]);
 });
 
 describe("Service validation", () => {
   test("accepts valid service data", () => {
     expect(validateService(validService)).toEqual([]);
+  });
+
+  test("rejects an invalid request body", () => {
+    expect(validateService(null)).toContain(
+      "Request body must be a JSON object."
+    );
+  });
+
+  test("rejects an array request body", () => {
+    expect(validateService([])).toContain(
+      "Request body must be a JSON object."
+    );
   });
 
   test("rejects a missing service name", () => {
@@ -56,6 +76,13 @@ describe("Service validation", () => {
     })).toContain("Description is required and must be text.");
   });
 
+  test("rejects a non-text description", () => {
+    expect(validateService({
+      ...validService,
+      description: 123
+    })).toContain("Description is required and must be text.");
+  });
+
   test("rejects a description over 500 characters", () => {
     expect(validateService({
       ...validService,
@@ -77,6 +104,13 @@ describe("Service validation", () => {
     })).toContain("Duration must be a positive whole number.");
   });
 
+  test("rejects a string duration", () => {
+    expect(validateService({
+      ...validService,
+      duration: "10"
+    })).toContain("Duration must be a positive whole number.");
+  });
+
   test("rejects an invalid priority", () => {
     expect(validateService({
       ...validService,
@@ -87,33 +121,24 @@ describe("Service validation", () => {
 
 describe("Service API", () => {
   test("lists services", async () => {
-    const services = [
-      {
-        id: 1,
-        serviceName: "Academic Advising",
-        description: "Help with academic planning",
-        duration: 10,
-        priority: "medium"
-      }
-    ];
-
-    db.execute.mockResolvedValueOnce([services, []]);
+    db.execute.mockResolvedValueOnce([[createdService], []]);
 
     const response = await request(app).get("/api/services");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual(services);
+    expect(response.body).toEqual([createdService]);
+  });
+
+  test("handles errors when listing services", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database error"));
+
+    const response = await request(app).get("/api/services");
+
+    expect(response.status).toBe(500);
+    expect(response.body.message).toBe("Could not retrieve services.");
   });
 
   test("creates a service", async () => {
-    const createdService = {
-      id: 1,
-      serviceName: "Academic Advising",
-      description: "Help with academic planning",
-      duration: 10,
-      priority: "medium"
-    };
-
     db.execute
       .mockResolvedValueOnce([{ insertId: 1 }, []])
       .mockResolvedValueOnce([[createdService], []]);
@@ -141,10 +166,9 @@ describe("Service API", () => {
   });
 
   test("rejects duplicate service names", async () => {
-    const duplicateError = new Error("Duplicate entry");
-    duplicateError.code = "ER_DUP_ENTRY";
-
-    db.execute.mockRejectedValueOnce(duplicateError);
+    const error = new Error("Duplicate entry");
+    error.code = "ER_DUP_ENTRY";
+    db.execute.mockRejectedValueOnce(error);
 
     const response = await request(app)
       .post("/api/services")
@@ -153,10 +177,20 @@ describe("Service API", () => {
     expect(response.status).toBe(409);
   });
 
+  test("handles errors when creating a service", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database error"));
+
+    const response = await request(app)
+      .post("/api/services")
+      .send(validService);
+
+    expect(response.status).toBe(500);
+    expect(response.body.message).toBe("Could not create service.");
+  });
+
   test("updates a service", async () => {
     const updatedService = {
-      id: 1,
-      serviceName: "Academic Advising",
+      ...createdService,
       description: "Updated advising service",
       duration: 15,
       priority: "high"
@@ -179,6 +213,15 @@ describe("Service API", () => {
     expect(response.body).toEqual(updatedService);
   });
 
+  test("rejects an invalid service ID", async () => {
+    const response = await request(app)
+      .put("/api/services/abc")
+      .send(validService);
+
+    expect(response.status).toBe(400);
+    expect(response.body.errors).toContain("Invalid service ID.");
+  });
+
   test("returns 404 when updating a missing service", async () => {
     db.execute
       .mockResolvedValueOnce([{ affectedRows: 0 }, []])
@@ -189,5 +232,90 @@ describe("Service API", () => {
       .send(validService);
 
     expect(response.status).toBe(404);
+  });
+
+  test("rejects duplicate names when updating a service", async () => {
+    const error = new Error("Duplicate entry");
+    error.code = "ER_DUP_ENTRY";
+    db.execute.mockRejectedValueOnce(error);
+
+    const response = await request(app)
+      .put("/api/services/1")
+      .send(validService);
+
+    expect(response.status).toBe(409);
+  });
+
+  test("handles database errors when updating a service", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database error"));
+
+    const response = await request(app)
+      .put("/api/services/1")
+      .send(validService);
+
+    expect(response.status).toBe(500);
+  });
+
+  test("rejects invalid data when updating a service", async () => {
+    const response = await request(app)
+      .put("/api/services/1")
+      .send({
+        serviceName: "",
+        description: "",
+        duration: 0,
+        priority: "urgent"
+      });
+
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("Session and access control", () => {
+  test("returns unauthenticated session status", async () => {
+    const response = await request(app).get("/api/session");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ authenticated: false });
+  });
+
+  test("rejects user access without login", async () => {
+    const response = await request(app).get("/api/user");
+
+    expect(response.status).toBe(401);
+  });
+
+  test("rejects administrator access without login", async () => {
+    const response = await request(app).get("/api/admin");
+
+    expect(response.status).toBe(401);
+  });
+
+  test("successfully logs out", async () => {
+    const response = await request(app).post("/api/logout");
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+  });
+});
+
+describe("Health endpoint", () => {
+  test("returns successful database health status", async () => {
+    db.execute.mockResolvedValueOnce([[{ result: 1 }], []]);
+
+    const response = await request(app).get("/api/health");
+
+    expect(response.status).toBe(200);
+    expect(response.body.database).toBe("Connected");
+    expect(response.body.success).toBe(true);
+  });
+
+  test("returns an error when the database is unavailable", async () => {
+    db.execute.mockRejectedValueOnce(new Error("Database unavailable"));
+
+    const response = await request(app).get("/api/health");
+
+    expect(response.status).toBe(500);
+    expect(response.body.database).toBe("Disconnected");
+    expect(response.body.success).toBe(false);
   });
 });
